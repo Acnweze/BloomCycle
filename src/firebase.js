@@ -31,7 +31,9 @@ if (firebaseConfigured) {
 
 function requireAuth() {
   if (!auth) {
-    throw new Error('BloomCycle email authentication has not been configured yet.');
+    const error = new Error('Account service is temporarily unavailable. Please try again later.');
+    error.code = 'auth/not-configured';
+    throw error;
   }
   return auth;
 }
@@ -78,6 +80,7 @@ export function getAuthMessage(error) {
     'auth/invalid-credential': 'Email or password is incorrect.',
     'auth/invalid-email': 'Enter a valid email address.',
     'auth/network-request-failed': 'Could not reach the account service. Check your connection and try again.',
+    'auth/not-configured': 'Account service is temporarily unavailable. Please try again later.',
     'auth/too-many-requests': 'Too many attempts. Wait a moment before trying again.',
     'auth/user-disabled': 'This account has been disabled.',
     'auth/weak-password': 'Use a stronger password with at least 8 characters.'

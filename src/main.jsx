@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  firebaseConfigured,
   getAuthMessage,
   observeAuth,
   registerAccount,
@@ -571,11 +570,8 @@ function AuthGate({ onAuthenticated }) {
               />
             </label>
           )}
-          {!firebaseConfigured && (
-            <p className="auth-message">Firebase email authentication must be configured before accounts can be used.</p>
-          )}
           {message && <p className={`auth-message ${messageType}`}>{message}</p>}
-          <button className="primary-btn" type="submit" disabled={busy || !firebaseConfigured}>
+          <button className="primary-btn" type="submit" disabled={busy}>
             <Icon name={mode === 'reset' ? 'mail' : 'lock'} />
             {busy && 'Please wait...'}
             {!busy && mode === 'register' && 'Create secure account'}
