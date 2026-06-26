@@ -1,10 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import {
+  firebaseConfigured,
+  getAuthMessage,
+  observeAuth,
+  registerAccount,
+  sendResetEmail,
+  signInAccount,
+  signOutAccount
+} from './firebase';
 import './styles.css';
 
 const STORAGE_KEY = 'bloomcycle-data-v1';
-const AUTH_KEY = 'bloomcycle-auth-v1';
-const SESSION_KEY = 'bloomcycle-session-v1';
 
 const signalOptions = {
   cramps: ['None', 'Mild', 'Moderate', 'Strong'],
@@ -219,9 +226,20 @@ function getConfidenceScore(data) {
   return Math.min(score, 100);
 }
 
-function loadStoredData() {
+function getUserStorageKey(userId) {
+  return `${STORAGE_KEY}:${userId}`;
+}
+
+function loadStoredData(storageKey = STORAGE_KEY) {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
+    let stored = localStorage.getItem(storageKey);
+    if (!stored && storageKey !== STORAGE_KEY) {
+      stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        localStorage.setItem(storageKey, stored);
+        localStorage.removeItem(STORAGE_KEY);
+      }
+    }
     if (!stored) return defaultData;
     const parsed = JSON.parse(stored);
     return {
@@ -246,23 +264,23 @@ function Root() {
   const [currentUser, setCurrentUser] = useState(null);
 
   useEffect(() => {
-    const session = localStorage.getItem(SESSION_KEY);
-    const auth = getStoredAuth();
-    if (session && auth?.username === session) {
-      setCurrentUser(auth.username);
-    }
-    setAuthChecked(true);
+    return observeAuth((user) => {
+      setCurrentUser(user ? {
+        uid: user.uid,
+        name: user.displayName || user.email?.split('@')[0] || 'Bloom user'
+      } : null);
+      setAuthChecked(true);
+    });
   }, []);
 
-  const handleAuthenticated = (username) => {
-    localStorage.setItem(SESSION_KEY, username);
-    setCurrentUser(username);
+  const handleAuthenticated = (user) => {
+    setCurrentUser({
+      uid: user.uid,
+      name: user.displayName || user.email?.split('@')[0] || 'Bloom user'
+    });
   };
 
-  const handleSignOut = () => {
-    localStorage.removeItem(SESSION_KEY);
-    setCurrentUser(null);
-  };
+  const handleSignOut = async () => signOutAccount();
 
   if (!authChecked) {
     return <div className="auth-shell"><div className="auth-card">Opening BloomCycle...</div></div>;
@@ -272,20 +290,21 @@ function Root() {
     return <AuthGate onAuthenticated={handleAuthenticated} />;
   }
 
-  return <App currentUser={currentUser} onSignOut={handleSignOut} />;
+  return <App key={currentUser.uid} currentUser={currentUser} onSignOut={handleSignOut} />;
 }
 
 function App({ currentUser, onSignOut }) {
   const [activePage, setActivePage] = useState('dashboard');
-  const [data, setData] = useState(loadStoredData);
+  const storageKey = getUserStorageKey(currentUser.uid);
+  const [data, setData] = useState(() => loadStoredData(storageKey));
   const [copied, setCopied] = useState(false);
   const stats = useMemo(() => getCycleStats(data.profile), [data.profile]);
   const confidence = useMemo(() => getConfidenceScore(data), [data]);
   const signature = useMemo(() => getCycleSignature(data, stats), [data, stats]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  }, [data]);
+    localStorage.setItem(storageKey, JSON.stringify(data));
+  }, [data, storageKey]);
 
   const updateProfile = (field, value) => {
     setData((current) => ({
@@ -391,7 +410,8 @@ function App({ currentUser, onSignOut }) {
             setData={setData}
             updateProfile={updateProfile}
             stats={stats}
-            currentUser={currentUser}
+            currentUser={currentUser.name}
+            storageKey={storageKey}
             onSignOut={onSignOut}
           />
         )}
@@ -419,20 +439,40 @@ function App({ currentUser, onSignOut }) {
 }
 
 function AuthGate({ onAuthenticated }) {
-  const hasAccount = Boolean(getStoredAuth());
-  const [mode, setMode] = useState(hasAccount ? 'login' : 'register');
+  const [mode, setMode] = useState('login');
+  const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [message, setMessage] = useState('');
+  const [messageType, setMessageType] = useState('error');
   const [busy, setBusy] = useState(false);
 
   const submitAuth = async (event) => {
     event.preventDefault();
     setMessage('');
+    setMessageType('error');
+    const cleanEmail = email.trim().toLowerCase();
     const cleanUsername = username.trim();
 
-    if (cleanUsername.length < 3) {
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setMessage('Enter a valid email address.');
+      return;
+    }
+    if (mode === 'reset') {
+      setBusy(true);
+      try {
+        await sendResetEmail(cleanEmail);
+        setMessageType('success');
+        setMessage('If an account uses this email, a password reset link has been sent. Check your inbox and spam folder.');
+      } catch (error) {
+        setMessage(getAuthMessage(error));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    if (mode === 'register' && cleanUsername.length < 3) {
       setMessage('Username must be at least 3 characters.');
       return;
     }
@@ -448,41 +488,24 @@ function AuthGate({ onAuthenticated }) {
     setBusy(true);
     try {
       if (mode === 'register') {
-        const existing = getStoredAuth();
-        if (existing) {
-          setMessage('This browser already has a BloomCycle account. Sign in or reset local data.');
-          return;
-        }
-        const credentials = await createCredentials(cleanUsername, password);
-        localStorage.setItem(AUTH_KEY, JSON.stringify(credentials));
-        onAuthenticated(cleanUsername);
+        const user = await registerAccount(cleanEmail, cleanUsername, password);
+        onAuthenticated(user);
         return;
       }
-
-      const stored = getStoredAuth();
-      if (!stored || stored.username !== cleanUsername) {
-        setMessage('Username or password is incorrect.');
-        return;
-      }
-
-      const valid = await verifyPassword(password, stored);
-      if (!valid) {
-        setMessage('Username or password is incorrect.');
-        return;
-      }
-      onAuthenticated(stored.username);
-    } catch {
-      setMessage('Could not complete authentication in this browser.');
+      const user = await signInAccount(cleanEmail, password);
+      onAuthenticated(user);
+    } catch (error) {
+      setMessage(getAuthMessage(error));
     } finally {
       setBusy(false);
     }
   };
 
-  const resetLocalAccount = () => {
-    localStorage.removeItem(AUTH_KEY);
-    localStorage.removeItem(SESSION_KEY);
-    setMode('register');
-    setMessage('Local account removed. Create a new username and password.');
+  const changeMode = (nextMode) => {
+    setMode(nextMode);
+    setMessage('');
+    setPassword('');
+    setConfirmPassword('');
   };
 
   return (
@@ -496,32 +519,46 @@ function AuthGate({ onAuthenticated }) {
           </div>
         </div>
         <p className="auth-copy">
-          {mode === 'register'
-            ? 'Create a local account before opening your cycle tracker.'
-            : 'Sign in to unlock your private tracker on this browser.'}
+          {mode === 'register' && 'Register with your email, username, and password.'}
+          {mode === 'login' && 'Sign in with your email and password to open your tracker.'}
+          {mode === 'reset' && 'Enter your registered email to receive a secure password reset link.'}
         </p>
 
         <form className="auth-form" onSubmit={submitAuth}>
           <label>
-            <span>Username</span>
+            <span>Email</span>
             <input
-              type="text"
-              autoComplete="username"
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              placeholder="Choose a private username"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="you@example.com"
             />
           </label>
-          <label>
-            <span>Password</span>
-            <input
-              type="password"
-              autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="At least 8 characters"
-            />
-          </label>
+          {mode === 'register' && (
+            <label>
+              <span>Username</span>
+              <input
+                type="text"
+                autoComplete="username"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                placeholder="Choose a private username"
+              />
+            </label>
+          )}
+          {mode !== 'reset' && (
+            <label>
+              <span>Password</span>
+              <input
+                type="password"
+                autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="At least 8 characters"
+              />
+            </label>
+          )}
           {mode === 'register' && (
             <label>
               <span>Confirm password</span>
@@ -534,26 +571,27 @@ function AuthGate({ onAuthenticated }) {
               />
             </label>
           )}
-          {message && <p className="auth-message">{message}</p>}
-          <button className="primary-btn" type="submit" disabled={busy}>
-            <Icon name="lock" /> {busy ? 'Checking...' : mode === 'register' ? 'Create secure access' : 'Sign in'}
+          {!firebaseConfigured && (
+            <p className="auth-message">Firebase email authentication must be configured before accounts can be used.</p>
+          )}
+          {message && <p className={`auth-message ${messageType}`}>{message}</p>}
+          <button className="primary-btn" type="submit" disabled={busy || !firebaseConfigured}>
+            <Icon name={mode === 'reset' ? 'mail' : 'lock'} />
+            {busy && 'Please wait...'}
+            {!busy && mode === 'register' && 'Create secure account'}
+            {!busy && mode === 'login' && 'Sign in'}
+            {!busy && mode === 'reset' && 'Send reset email'}
           </button>
         </form>
 
         <div className="auth-actions">
-          <button type="button" onClick={() => setMode(mode === 'register' ? 'login' : 'register')}>
-            {mode === 'register' ? 'I already have a local account' : 'Create a local account'}
-          </button>
-          {hasAccount && (
-            <button type="button" onClick={resetLocalAccount}>
-              Reset local account
-            </button>
-          )}
+          {mode !== 'login' && <button type="button" onClick={() => changeMode('login')}>Back to sign in</button>}
+          {mode === 'login' && <button type="button" onClick={() => changeMode('register')}>Create an account</button>}
+          {mode === 'login' && <button type="button" onClick={() => changeMode('reset')}>Forgot password?</button>}
         </div>
 
         <p className="auth-note">
-          Passwords are salted and hashed in this browser. This is local privacy protection, not a replacement for
-          server-grade security or device encryption.
+          Firebase securely manages account passwords and reset emails. Your cycle logs remain stored only in this browser.
         </p>
       </section>
     </div>
@@ -805,10 +843,10 @@ function InsightsPage({ data, stats, confidence, signature, copySummary, copied,
   );
 }
 
-function SettingsPage({ data, setData, updateProfile, stats, currentUser, onSignOut }) {
+function SettingsPage({ data, setData, updateProfile, stats, currentUser, storageKey, onSignOut }) {
   const clearData = () => {
     setData(defaultData);
-    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(storageKey);
   };
 
   const updatePhaseNote = (phase, value) => {
@@ -876,7 +914,7 @@ function SettingsPage({ data, setData, updateProfile, stats, currentUser, onSign
       </div>
       <div className="privacy-note">
         <Icon name="lock" />
-        <p>Your entries are stored in this browser with localStorage. There is no backend in this version.</p>
+        <p>Firebase secures your account. Cycle entries remain stored only in this browser with localStorage.</p>
       </div>
     </section>
   );
@@ -1202,61 +1240,6 @@ function getTopSignals(data) {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 3)
     .map(([label]) => label);
-}
-
-function getStoredAuth() {
-  try {
-    const stored = localStorage.getItem(AUTH_KEY);
-    return stored ? JSON.parse(stored) : null;
-  } catch {
-    return null;
-  }
-}
-
-async function createCredentials(username, password) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const hash = await hashPassword(password, salt);
-  return {
-    username,
-    salt: arrayBufferToBase64(salt),
-    hash
-  };
-}
-
-async function verifyPassword(password, stored) {
-  const salt = base64ToUint8Array(stored.salt);
-  const candidateHash = await hashPassword(password, salt);
-  return candidateHash === stored.hash;
-}
-
-async function hashPassword(password, salt) {
-  const encoder = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
-  const derivedBits = await crypto.subtle.deriveBits(
-    {
-      name: 'PBKDF2',
-      salt,
-      iterations: 150000,
-      hash: 'SHA-256'
-    },
-    keyMaterial,
-    256
-  );
-  return arrayBufferToBase64(derivedBits);
-}
-
-function arrayBufferToBase64(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte);
-  });
-  return btoa(binary);
-}
-
-function base64ToUint8Array(value) {
-  const binary = atob(value);
-  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
 
 createRoot(document.getElementById('root')).render(<Root />);

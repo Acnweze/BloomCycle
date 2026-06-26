@@ -12,16 +12,17 @@ BloomCycle is a mobile-first React app for privately tracking periods, estimated
 - Cycle Confidence Score and Cycle Signature
 - Copyable partner or gynecologist summary using patient details
 - Private Mode for less sensitive on-screen wording
-- Local username and password access
-- Browser-only data storage with no backend
+- Email, username, and password registration
+- Password reset links delivered by email
+- Browser-only cycle data storage
 
 ## Technology
 
 - React 19
 - Vite 7
 - CSS
-- Browser localStorage
-- Web Crypto API with PBKDF2 password hashing
+- Browser localStorage for cycle records
+- Firebase Authentication for accounts and password-reset email
 
 ## Run Locally
 
@@ -32,6 +33,24 @@ npm run dev
 
 Open `http://localhost:5173/`.
 
+## Configure Email Authentication
+
+1. Create a project in the [Firebase console](https://console.firebase.google.com/).
+2. Add a Web app to the Firebase project.
+3. In **Authentication > Sign-in method**, enable **Email/Password**.
+4. Copy `.env.example` to `.env`.
+5. Replace the example values with the Web app configuration from Firebase.
+6. Restart `npm run dev` after changing `.env`.
+
+```env
+VITE_FIREBASE_API_KEY=your_firebase_api_key
+VITE_FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=your-project-id
+VITE_FIREBASE_APP_ID=your_firebase_app_id
+```
+
+The `.env` file is ignored by Git and must not be committed.
+
 ## Production Build
 
 ```bash
@@ -40,7 +59,7 @@ npm run build
 
 ## Privacy and Security
 
-BloomCycle stores account and tracking information in the current browser. The password is salted and hashed, but this local-only version does not provide production-grade account security, encrypted cloud backup, password recovery, or cross-device synchronization.
+Firebase Authentication manages account passwords, login sessions, and reset emails. BloomCycle cycle records remain in the current browser and are not synchronized across devices. Firebase Web configuration identifies the Firebase project; access must still be protected with Firebase Authentication settings and security rules.
 
 ## Medical Disclaimer
 

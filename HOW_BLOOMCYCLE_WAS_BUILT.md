@@ -14,8 +14,8 @@ The app is designed to be calm, private, beginner-friendly, and educational. It 
 - Vite 7 runs the development server and creates the production build.
 - CSS provides the responsive layout and visual design.
 - localStorage saves app data in the user's browser.
-- The Web Crypto API hashes the local account password.
-- No backend or external database is used in this version.
+- Firebase Authentication manages email/password accounts and password-reset emails.
+- localStorage cycle records are not uploaded to Firebase.
 
 ## 3. Project Location and Files
 
@@ -110,13 +110,21 @@ The gynecologist section stores patient information, not the doctor's informatio
 
 ## 6. Saving Data With localStorage
 
-Three storage keys separate tracking data, login credentials, and the current session:
+Tracking data uses a base browser storage key:
 
 ```jsx
 const STORAGE_KEY = 'bloomcycle-data-v1';
-const AUTH_KEY = 'bloomcycle-auth-v1';
-const SESSION_KEY = 'bloomcycle-session-v1';
 ```
+
+After sign-in, the Firebase user ID is added to the key:
+
+```jsx
+function getUserStorageKey(userId) {
+  return `${STORAGE_KEY}:${userId}`;
+}
+```
+
+This prevents two Firebase accounts using the same browser from seeing each other's local cycle records.
 
 The initial React state is loaded from the browser:
 
@@ -153,7 +161,7 @@ function loadStoredData() {
 }
 ```
 
-Because there is no backend, data stays in the same browser. Clearing browser data can delete it, and it does not automatically sync to another device.
+Cycle data stays in the same browser. Clearing browser data can delete it, and it does not automatically sync to another device. Firebase stores account credentials and sessions, but not the cycle journal.
 
 ## 7. Updating React State
 
@@ -309,52 +317,36 @@ function getConfidenceScore(data) {
 
 This is a data-completeness score, not a medical accuracy percentage.
 
-## 13. Registration and Password Security
+## 13. Registration, Login, and Password Reset
 
-The authentication screen supports registration, login, sign-out, and local account reset. Usernames must contain at least three characters, and passwords must contain at least eight characters.
+Registration requires an email, username, and password. Login uses email and password, while the username is saved as the Firebase display name and shown inside BloomCycle.
 
-The password is salted and hashed with PBKDF2 before being stored:
+Firebase Authentication manages credentials and persistent sessions:
 
 ```jsx
-async function createCredentials(username, password) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const hash = await hashPassword(password, salt);
-
-  return {
-    username,
-    salt: arrayBufferToBase64(salt),
-    hash
-  };
+export async function registerAccount(email, username, password) {
+  const credential = await createUserWithEmailAndPassword(auth, email, password);
+  await updateProfile(credential.user, { displayName: username });
+  return credential.user;
 }
 
-async function hashPassword(password, salt) {
-  const encoder = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(password),
-    'PBKDF2',
-    false,
-    ['deriveBits']
-  );
-
-  const bits = await crypto.subtle.deriveBits(
-    {
-      name: 'PBKDF2',
-      salt,
-      iterations: 150000,
-      hash: 'SHA-256'
-    },
-    keyMaterial,
-    256
-  );
-
-  return arrayBufferToBase64(bits);
+export async function signInAccount(email, password) {
+  const credential = await signInWithEmailAndPassword(auth, email, password);
+  return credential.user;
 }
 ```
 
-During login, the entered password is hashed with the stored salt and compared with the saved hash.
+The Forgot Password form sends a secure recovery email:
 
-This protects the plain-text password from being stored, but it is local browser protection only. Production security requires a backend, HTTPS, server-side sessions, account recovery, database encryption, rate limiting, and security review.
+```jsx
+export async function sendResetEmail(email) {
+  await sendPasswordResetEmail(auth, email);
+}
+```
+
+Firebase handles the reset token and password-change page. BloomCycle uses a neutral success message so the form does not reveal whether an email address has an account.
+
+Firebase configuration is read from Vite environment variables in `.env`. The `.env.example` file documents the required values without containing real project credentials.
 
 ## 14. Private Mode
 
@@ -477,7 +469,7 @@ npm run preview
 
 Before using BloomCycle as a real multi-device product, add:
 
-1. A secure backend and encrypted database.
+1. An encrypted database if cross-device cycle synchronization is added.
 2. Proper account registration, password recovery, and session expiration.
 3. HTTPS and server-side authorization.
 4. Optional encrypted export and backup.

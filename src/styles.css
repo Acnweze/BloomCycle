@@ -165,6 +165,13 @@ svg {
   font-weight: 800;
 }
 
+.auth-message.success {
+  color: #315f3b;
+  background: rgba(124, 154, 130, 0.16);
+  border-radius: 14px;
+  padding: 0.75rem;
+}
+
 .auth-form {
   display: grid;
   gap: 0.85rem;
