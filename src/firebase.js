@@ -21,12 +21,22 @@ const firebaseConfig = {
 export const firebaseConfigured = Object.values(firebaseConfig).every(Boolean);
 
 let auth = null;
+let firebaseApp = null;
 let authReady = Promise.resolve();
 
 if (firebaseConfigured) {
-  const app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
+  firebaseApp = initializeApp(firebaseConfig);
+  auth = getAuth(firebaseApp);
   authReady = setPersistence(auth, browserLocalPersistence);
+}
+
+function requireApp() {
+  if (!firebaseApp) {
+    const error = new Error('Cloud backup is temporarily unavailable.');
+    error.code = 'cloud/not-configured';
+    throw error;
+  }
+  return firebaseApp;
 }
 
 function requireAuth() {
@@ -72,6 +82,22 @@ export async function sendResetEmail(email) {
 export async function signOutAccount() {
   await authReady;
   await signOut(requireAuth());
+}
+
+export async function saveCloudBackup(userId, data) {
+  const { doc, getFirestore, serverTimestamp, setDoc } = await import('firebase/firestore');
+  const database = getFirestore(requireApp());
+  await setDoc(doc(database, 'users', userId, 'backups', 'cycleData'), {
+    data,
+    updatedAt: serverTimestamp()
+  });
+}
+
+export async function loadCloudBackup(userId) {
+  const { doc, getDoc, getFirestore } = await import('firebase/firestore');
+  const database = getFirestore(requireApp());
+  const snapshot = await getDoc(doc(database, 'users', userId, 'backups', 'cycleData'));
+  return snapshot.exists() ? snapshot.data().data : null;
 }
 
 export function getAuthMessage(error) {

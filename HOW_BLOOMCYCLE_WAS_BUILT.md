@@ -161,7 +161,9 @@ function loadStoredData() {
 }
 ```
 
-Cycle data stays in the same browser. Clearing browser data can delete it, and it does not automatically sync to another device. Firebase stores account credentials and sessions, but not the cycle journal.
+By default, cycle data stays in the same browser. Clearing browser data can delete it. Firebase stores account credentials and sessions, while cycle records are uploaded only when the user chooses cloud backup.
+
+When cloud backup is enabled, BloomCycle also writes a copy beneath `users/{uid}/backups/cycleData` in Cloud Firestore. The included security rules require the signed-in user ID to match the document owner. Local tracking remains available when cloud backup is disabled or unavailable.
 
 ## 7. Updating React State
 
@@ -271,25 +273,25 @@ if (isoDate(date) === isoDate(cycleOvulation)) type = 'ovulation';
 
 CSS classes use `type` to apply distinct colors. The current date also receives a `today` class.
 
-## 11. Body Signal Journal
+## 11. Daily Check-In and Body Signal Journal
 
-The journal records cramps, cravings, sleep, energy, acne, headache, mood, and stress. Each entry receives the current date.
+The daily check-in records water, sleep hours, medication completion, mood, flow, symptoms, and notes. The Body Signal Journal adds cramps, cravings, sleep quality, energy, acne, headache, mood, and stress. Each saved check-in receives the current date.
 
 ```jsx
 const saveJournalEntry = (entry) => {
-  const stampedEntry = { ...entry, date: isoDate(new Date()) };
+  const stampedEntry = { ...entry, ...data.todayLog, date: isoDate(new Date()) };
 
   setData((current) => ({
     ...current,
-    journal: [
-      stampedEntry,
-      ...current.journal.filter((item) => item.date !== stampedEntry.date)
-    ].slice(0, 30)
+    journal: [stampedEntry, ...current.journal.filter((item) => item.date !== stampedEntry.date)].slice(0, 90),
+    dailyLogs: [stampedEntry, ...current.dailyLogs.filter((item) => item.date !== stampedEntry.date)].slice(0, 365)
   }));
 };
 ```
 
-Only one entry per date is kept, and the journal is limited to the 30 most recent entries.
+Only one entry per date is kept. Daily logs provide the source data for mood, symptom, sleep, water, and cycle analytics. Multiple saved period-start dates provide measured cycle lengths and a regularity description.
+
+Reminder schedules use browser notifications while BloomCycle is open. Medication reminders store only the user-entered name and time and never provide dosing advice. PDF reports are generated locally with jsPDF and include the educational disclaimer.
 
 ## 12. Cycle Confidence Score
 

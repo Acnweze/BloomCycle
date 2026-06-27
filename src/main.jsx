@@ -2,12 +2,17 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   getAuthMessage,
+  loadCloudBackup,
   observeAuth,
   registerAccount,
+  saveCloudBackup,
   sendResetEmail,
   signInAccount,
   signOutAccount
 } from './firebase';
+import { getCycleAnalytics } from './analytics';
+import { checkDueReminders, getReminderPermission, requestReminderPermission } from './reminders';
+import { exportCyclePdf } from './report';
 import './styles.css';
 
 const STORAGE_KEY = 'bloomcycle-data-v1';
@@ -26,19 +31,28 @@ const signalOptions = {
 const defaultData = {
   profile: {
     lastPeriodStart: '',
+    periodStarts: [],
     periodLength: 5,
     cycleLength: 28,
     privateMode: false
   },
   todayLog: {
+    date: isoDate(new Date()),
     symptoms: [],
     mood: 'Calm',
     flow: 'None',
-    notes: ''
+    notes: '',
+    waterGlasses: 0,
+    sleepHours: '',
+    medicationTaken: []
   },
   journal: [],
+  dailyLogs: [],
   settings: {
     reminderEnabled: true,
+    periodReminderDays: 2,
+    medications: [],
+    cloudBackupEnabled: false,
     privacyName: 'Bloom',
     patientName: '',
     clinician: {
@@ -229,6 +243,33 @@ function getUserStorageKey(userId) {
   return `${STORAGE_KEY}:${userId}`;
 }
 
+function normalizeData(parsed) {
+  const savedTodayLog = { ...defaultData.todayLog, ...parsed?.todayLog };
+  const todayLog = savedTodayLog.date === isoDate(new Date())
+    ? savedTodayLog
+    : { ...defaultData.todayLog, date: isoDate(new Date()) };
+
+  return {
+    ...defaultData,
+    ...parsed,
+    profile: {
+      ...defaultData.profile,
+      ...parsed?.profile,
+      periodStarts: parsed?.profile?.periodStarts || []
+    },
+    todayLog,
+    journal: parsed?.journal || [],
+    dailyLogs: parsed?.dailyLogs || [],
+    settings: {
+      ...defaultData.settings,
+      ...parsed?.settings,
+      medications: parsed?.settings?.medications || [],
+      clinician: { ...defaultData.settings.clinician, ...parsed?.settings?.clinician },
+      phaseNotes: { ...defaultData.settings.phaseNotes, ...parsed?.settings?.phaseNotes }
+    }
+  };
+}
+
 function loadStoredData(storageKey = STORAGE_KEY) {
   try {
     let stored = localStorage.getItem(storageKey);
@@ -240,19 +281,7 @@ function loadStoredData(storageKey = STORAGE_KEY) {
       }
     }
     if (!stored) return defaultData;
-    const parsed = JSON.parse(stored);
-    return {
-      ...defaultData,
-      ...parsed,
-      profile: { ...defaultData.profile, ...parsed.profile },
-      todayLog: { ...defaultData.todayLog, ...parsed.todayLog },
-      settings: {
-        ...defaultData.settings,
-        ...parsed.settings,
-        clinician: { ...defaultData.settings.clinician, ...parsed.settings?.clinician },
-        phaseNotes: { ...defaultData.settings.phaseNotes, ...parsed.settings?.phaseNotes }
-      }
-    };
+    return normalizeData(JSON.parse(stored));
   } catch {
     return defaultData;
   }
@@ -297,19 +326,61 @@ function App({ currentUser, onSignOut }) {
   const storageKey = getUserStorageKey(currentUser.uid);
   const [data, setData] = useState(() => loadStoredData(storageKey));
   const [copied, setCopied] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [cloudStatus, setCloudStatus] = useState('Local only');
+  const [notificationPermission, setNotificationPermission] = useState(getReminderPermission);
   const stats = useMemo(() => getCycleStats(data.profile), [data.profile]);
   const confidence = useMemo(() => getConfidenceScore(data), [data]);
   const signature = useMemo(() => getCycleSignature(data, stats), [data, stats]);
+  const analytics = useMemo(() => getCycleAnalytics(data), [data]);
 
   useEffect(() => {
     localStorage.setItem(storageKey, JSON.stringify(data));
   }, [data, storageKey]);
+
+  useEffect(() => {
+    checkDueReminders(data, stats);
+    const reminderTimer = setInterval(() => checkDueReminders(data, stats), 30000);
+    return () => clearInterval(reminderTimer);
+  }, [data, stats]);
+
+  useEffect(() => {
+    if (!data.settings.cloudBackupEnabled) return undefined;
+    setCloudStatus('Saving...');
+    const cloudTimer = setTimeout(async () => {
+      try {
+        await saveCloudBackup(currentUser.uid, data);
+        setCloudStatus(`Synced ${new Intl.DateTimeFormat('en', { hour: 'numeric', minute: '2-digit' }).format(new Date())}`);
+      } catch {
+        setCloudStatus('Cloud unavailable');
+      }
+    }, 1200);
+    return () => clearTimeout(cloudTimer);
+  }, [currentUser.uid, data]);
 
   const updateProfile = (field, value) => {
     setData((current) => ({
       ...current,
       profile: { ...current.profile, [field]: value }
     }));
+  };
+
+  const recordPeriodStart = (value) => {
+    setData((current) => {
+      const previous = current.profile.lastPeriodStart;
+      let periodStarts = current.profile.periodStarts || [];
+      if (previous && value && Math.abs(daysBetween(parseLocalDate(previous), parseLocalDate(value))) < 14) {
+        periodStarts = periodStarts.filter((date) => date !== previous);
+      }
+      return {
+        ...current,
+        profile: {
+          ...current.profile,
+          lastPeriodStart: value,
+          periodStarts: [...new Set([...periodStarts, value].filter(Boolean))].sort()
+        }
+      };
+    });
   };
 
   const updateTodayLog = (field, value) => {
@@ -335,11 +406,27 @@ function App({ currentUser, onSignOut }) {
   };
 
   const saveJournalEntry = (entry) => {
-    const stampedEntry = { ...entry, date: isoDate(new Date()) };
+    const stampedEntry = { ...entry, ...data.todayLog, date: isoDate(new Date()) };
     setData((current) => ({
       ...current,
-      journal: [stampedEntry, ...current.journal.filter((item) => item.date !== stampedEntry.date)].slice(0, 30)
+      journal: [stampedEntry, ...current.journal.filter((item) => item.date !== stampedEntry.date)].slice(0, 90),
+      dailyLogs: [stampedEntry, ...(current.dailyLogs || []).filter((item) => item.date !== stampedEntry.date)].slice(0, 365)
     }));
+  };
+
+  const toggleMedicationTaken = (medicationId) => {
+    setData((current) => {
+      const taken = current.todayLog.medicationTaken || [];
+      return {
+        ...current,
+        todayLog: {
+          ...current.todayLog,
+          medicationTaken: taken.includes(medicationId)
+            ? taken.filter((id) => id !== medicationId)
+            : [...taken, medicationId]
+        }
+      };
+    });
   };
 
   const copySummary = async () => {
@@ -347,6 +434,45 @@ function App({ currentUser, onSignOut }) {
     await navigator.clipboard.writeText(summary);
     setCopied(true);
     setTimeout(() => setCopied(false), 1800);
+  };
+
+  const downloadPdf = async () => {
+    setExporting(true);
+    try {
+      await exportCyclePdf(buildSummary(data, stats, confidence), analytics);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const backUpNow = async () => {
+    setCloudStatus('Saving...');
+    try {
+      await saveCloudBackup(currentUser.uid, data);
+      setCloudStatus('Backup complete');
+    } catch {
+      setCloudStatus('Cloud unavailable');
+    }
+  };
+
+  const restoreBackup = async () => {
+    setCloudStatus('Checking backup...');
+    try {
+      const restored = await loadCloudBackup(currentUser.uid);
+      if (!restored) {
+        setCloudStatus('No backup found');
+        return;
+      }
+      setData(normalizeData(restored));
+      setCloudStatus('Backup restored');
+    } catch {
+      setCloudStatus('Cloud unavailable');
+    }
+  };
+
+  const enableNotifications = async () => {
+    const permission = await requestReminderPermission();
+    setNotificationPermission(permission);
   };
 
   const display = (text) => (data.profile.privateMode ? maskSensitive(text) : text);
@@ -379,6 +505,7 @@ function App({ currentUser, onSignOut }) {
             confidence={confidence}
             signature={signature}
             updateProfile={updateProfile}
+            recordPeriodStart={recordPeriodStart}
             display={display}
           />
         )}
@@ -388,6 +515,7 @@ function App({ currentUser, onSignOut }) {
             data={data}
             updateTodayLog={updateTodayLog}
             toggleSymptom={toggleSymptom}
+            toggleMedicationTaken={toggleMedicationTaken}
             saveJournalEntry={saveJournalEntry}
             display={display}
           />
@@ -398,8 +526,11 @@ function App({ currentUser, onSignOut }) {
             stats={stats}
             confidence={confidence}
             signature={signature}
+            analytics={analytics}
             copySummary={copySummary}
             copied={copied}
+            downloadPdf={downloadPdf}
+            exporting={exporting}
             display={display}
           />
         )}
@@ -411,6 +542,11 @@ function App({ currentUser, onSignOut }) {
             stats={stats}
             currentUser={currentUser.name}
             storageKey={storageKey}
+            cloudStatus={cloudStatus}
+            notificationPermission={notificationPermission}
+            enableNotifications={enableNotifications}
+            backUpNow={backUpNow}
+            restoreBackup={restoreBackup}
             onSignOut={onSignOut}
           />
         )}
@@ -594,7 +730,7 @@ function AuthGate({ onAuthenticated }) {
   );
 }
 
-function Dashboard({ data, stats, confidence, signature, updateProfile, display }) {
+function Dashboard({ data, stats, confidence, signature, updateProfile, recordPeriodStart, display }) {
   const ritual = getRitual(stats.phase);
   const phaseNote = data.settings.phaseNotes[stats.phase];
 
@@ -634,8 +770,9 @@ function Dashboard({ data, stats, confidence, signature, updateProfile, display 
           <span>{display('Last period start')}</span>
           <input
             type="date"
+            max={isoDate(new Date())}
             value={data.profile.lastPeriodStart}
-            onChange={(event) => updateProfile('lastPeriodStart', event.target.value)}
+            onChange={(event) => recordPeriodStart(event.target.value)}
           />
         </label>
         <div className="two-col">
@@ -709,7 +846,8 @@ function CalendarPage({ stats, data, display }) {
   );
 }
 
-function LogPage({ data, updateTodayLog, toggleSymptom, saveJournalEntry, display }) {
+function LogPage({ data, updateTodayLog, toggleSymptom, toggleMedicationTaken, saveJournalEntry, display }) {
+  const [saved, setSaved] = useState(false);
   const [signals, setSignals] = useState({
     cramps: 'None',
     cravings: 'None',
@@ -725,11 +863,64 @@ function LogPage({ data, updateTodayLog, toggleSymptom, saveJournalEntry, displa
     setSignals((current) => ({ ...current, [field]: value }));
   };
 
+  const saveCheckIn = () => {
+    saveJournalEntry(signals);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1800);
+  };
+
+  const updateWater = (amount) => {
+    updateTodayLog('waterGlasses', Math.min(20, Math.max(0, Number(data.todayLog.waterGlasses) + amount)));
+  };
+
   return (
     <section className="page">
-      <SectionHeader title={display('Log Symptoms')} subtitle={display('Save what you notice today')} />
+      <SectionHeader title={display('Daily Check-In')} subtitle={display('A quick picture of how your body feels today')} />
 
       <div className="form-panel">
+        <div className="care-checkin-grid">
+          <div className="care-control">
+            <div className="care-control-heading">
+              <Icon name="water" />
+              <span>{display('Water')}</span>
+            </div>
+            <div className="stepper" aria-label="Water glasses">
+              <button type="button" aria-label="Remove one glass" onClick={() => updateWater(-1)}><Icon name="minus" /></button>
+              <strong>{data.todayLog.waterGlasses}<small> glasses</small></strong>
+              <button type="button" aria-label="Add one glass" onClick={() => updateWater(1)}><Icon name="plus" /></button>
+            </div>
+            <div className="mini-progress"><span style={{ width: `${Math.min(100, (data.todayLog.waterGlasses / 8) * 100)}%` }} /></div>
+          </div>
+          <label className="care-control">
+            <span className="care-control-heading"><Icon name="moon" /> {display('Sleep')}</span>
+            <input
+              type="number"
+              min="0"
+              max="16"
+              step="0.5"
+              value={data.todayLog.sleepHours}
+              placeholder="Hours slept"
+              onChange={(event) => updateTodayLog('sleepHours', event.target.value)}
+            />
+          </label>
+        </div>
+        {(data.settings.medications || []).length > 0 && (
+          <div>
+            <span className="field-title">{display('Medication check')}</span>
+            <div className="medication-checks">
+              {data.settings.medications.filter((item) => item.enabled).map((medication) => (
+                <label key={medication.id}>
+                  <input
+                    type="checkbox"
+                    checked={(data.todayLog.medicationTaken || []).includes(medication.id)}
+                    onChange={() => toggleMedicationTaken(medication.id)}
+                  />
+                  <span>{medication.name} <small>{medication.time}</small></span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
         <label>
           <span>{display('Mood')}</span>
           <select value={data.todayLog.mood} onChange={(event) => updateTodayLog('mood', event.target.value)}>
@@ -780,15 +971,15 @@ function LogPage({ data, updateTodayLog, toggleSymptom, saveJournalEntry, displa
             </label>
           ))}
         </div>
-        <button className="primary-btn" type="button" onClick={() => saveJournalEntry(signals)}>
-          <Icon name="save" /> Save body signals
+        <button className="primary-btn" type="button" onClick={saveCheckIn}>
+          <Icon name="save" /> {saved ? 'Check-in saved' : "Save today's check-in"}
         </button>
       </div>
     </section>
   );
 }
 
-function InsightsPage({ data, stats, confidence, signature, copySummary, copied, display }) {
+function InsightsPage({ data, stats, confidence, signature, analytics, copySummary, copied, downloadPdf, exporting, display }) {
   const recent = data.journal.slice(0, 5);
   const topSignals = getTopSignals(data);
   const ritual = getRitual(stats.phase);
@@ -819,10 +1010,16 @@ function InsightsPage({ data, stats, confidence, signature, copySummary, copied,
         </article>
       </div>
       <SignalTimeline data={data} display={display} />
+      <AnalyticsPanel analytics={analytics} display={display} />
       <ConfidenceCard confidence={confidence} />
-      <button className="summary-btn" type="button" onClick={copySummary}>
-        <Icon name="copy" /> {copied ? 'Summary copied' : display('Partner/Doctor Summary')}
-      </button>
+      <div className="report-actions">
+        <button className="summary-btn" type="button" onClick={copySummary}>
+          <Icon name="copy" /> {copied ? 'Summary copied' : display('Copy care summary')}
+        </button>
+        <button className="summary-btn secondary" type="button" onClick={downloadPdf} disabled={exporting}>
+          <Icon name="download" /> {exporting ? 'Preparing PDF...' : 'Export PDF report'}
+        </button>
+      </div>
       <div className="history-list">
         <h3>{display('Recent body signals')}</h3>
         {recent.length === 0 && <p className="muted">No journal entries yet.</p>}
@@ -839,7 +1036,20 @@ function InsightsPage({ data, stats, confidence, signature, copySummary, copied,
   );
 }
 
-function SettingsPage({ data, setData, updateProfile, stats, currentUser, storageKey, onSignOut }) {
+function SettingsPage({
+  data,
+  setData,
+  updateProfile,
+  stats,
+  currentUser,
+  storageKey,
+  cloudStatus,
+  notificationPermission,
+  enableNotifications,
+  backUpNow,
+  restoreBackup,
+  onSignOut
+}) {
   const clearData = () => {
     setData(defaultData);
     localStorage.removeItem(storageKey);
@@ -880,8 +1090,8 @@ function SettingsPage({ data, setData, updateProfile, stats, currentUser, storag
         </label>
         <label className="switch-row">
           <span>
-            <strong>Gentle reminders</strong>
-            <small>Keep reminder preference saved locally for later.</small>
+            <strong>Period and medication reminders</strong>
+            <small>Show reminders while BloomCycle is running.</small>
           </span>
           <input
             type="checkbox"
@@ -894,6 +1104,69 @@ function SettingsPage({ data, setData, updateProfile, stats, currentUser, storag
             }
           />
         </label>
+        {data.settings.reminderEnabled && (
+          <section className="settings-section">
+            <div className="section-header compact">
+              <h2>Reminder schedule</h2>
+              <p>Notifications contain discreet wording and no dosage advice.</p>
+            </div>
+            <label>
+              <span>Period reminder</span>
+              <select
+                value={data.settings.periodReminderDays}
+                onChange={(event) => setData((current) => ({
+                  ...current,
+                  settings: { ...current.settings, periodReminderDays: Number(event.target.value) }
+                }))}
+              >
+                <option value="1">1 day before</option>
+                <option value="2">2 days before</option>
+                <option value="3">3 days before</option>
+                <option value="5">5 days before</option>
+              </select>
+            </label>
+            <button
+              className="outline-btn"
+              type="button"
+              onClick={enableNotifications}
+              disabled={notificationPermission === 'denied' || notificationPermission === 'unsupported'}
+            >
+              <Icon name="bell" />
+              {notificationPermission === 'granted' && 'Notifications enabled'}
+              {notificationPermission === 'default' && 'Enable browser notifications'}
+              {notificationPermission === 'denied' && 'Notifications blocked in browser'}
+              {notificationPermission === 'unsupported' && 'Notifications unavailable'}
+            </button>
+            <MedicationReminders data={data} setData={setData} />
+          </section>
+        )}
+        <section className="settings-section">
+          <div className="section-header compact status-heading">
+            <div>
+              <h2>Secure cloud backup</h2>
+              <p>Keep an optional copy connected to your account.</p>
+            </div>
+            <span className="status-badge">{cloudStatus}</span>
+          </div>
+          <label className="switch-row compact-switch">
+            <span>
+              <strong>Automatic backup</strong>
+              <small>Sync changes after you update a check-in.</small>
+            </span>
+            <input
+              type="checkbox"
+              checked={data.settings.cloudBackupEnabled}
+              onChange={(event) => setData((current) => ({
+                ...current,
+                settings: { ...current.settings, cloudBackupEnabled: event.target.checked }
+              }))}
+            />
+          </label>
+          <div className="settings-actions">
+            <button className="outline-btn" type="button" onClick={backUpNow}><Icon name="cloud" /> Back up now</button>
+            <button className="outline-btn" type="button" onClick={restoreBackup}><Icon name="cycle" /> Restore backup</button>
+          </div>
+        </section>
         <label>
           <span>Personal note for {stats.phase}</span>
           <textarea
@@ -910,9 +1183,83 @@ function SettingsPage({ data, setData, updateProfile, stats, currentUser, storag
       </div>
       <div className="privacy-note">
         <Icon name="lock" />
-        <p>Firebase secures your account. Cycle entries remain stored only in this browser with localStorage.</p>
+        <p>Cycle entries stay on this device unless you choose cloud backup. You can disable backup at any time.</p>
       </div>
     </section>
+  );
+}
+
+function MedicationReminders({ data, setData }) {
+  const [name, setName] = useState('');
+  const [time, setTime] = useState('08:00');
+
+  const updateMedications = (medications) => {
+    setData((current) => ({
+      ...current,
+      settings: { ...current.settings, medications }
+    }));
+  };
+
+  const addMedication = () => {
+    const cleanName = name.trim();
+    if (!cleanName) return;
+    const medication = {
+      id: globalThis.crypto?.randomUUID?.() || `${Date.now()}`,
+      name: cleanName,
+      time,
+      enabled: true
+    };
+    updateMedications([...(data.settings.medications || []), medication]);
+    setName('');
+  };
+
+  const toggleMedication = (id) => {
+    updateMedications(data.settings.medications.map((item) => (
+      item.id === id ? { ...item, enabled: !item.enabled } : item
+    )));
+  };
+
+  const removeMedication = (id) => {
+    updateMedications(data.settings.medications.filter((item) => item.id !== id));
+  };
+
+  return (
+    <div className="medication-manager">
+      <div className="section-header compact">
+        <h2>Medication reminders</h2>
+        <p>Add only medicines already recommended for you.</p>
+      </div>
+      <div className="medication-form">
+        <label>
+          <span>Medication name</span>
+          <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Example: Iron tablet" />
+        </label>
+        <label>
+          <span>Time</span>
+          <input type="time" value={time} onChange={(event) => setTime(event.target.value)} />
+        </label>
+        <button className="icon-action" type="button" aria-label="Add medication reminder" onClick={addMedication}>
+          <Icon name="plus" />
+        </button>
+      </div>
+      <div className="medication-list">
+        {(data.settings.medications || []).map((medication) => (
+          <div key={medication.id}>
+            <button
+              className={`medication-toggle ${medication.enabled ? 'active' : ''}`}
+              type="button"
+              onClick={() => toggleMedication(medication.id)}
+            >
+              <Icon name="pill" />
+              <span><strong>{medication.name}</strong><small>{medication.time}</small></span>
+            </button>
+            <button className="remove-btn" type="button" aria-label={`Remove ${medication.name}`} onClick={() => removeMedication(medication.id)}>
+              <Icon name="close" />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -1039,6 +1386,41 @@ function SignalTimeline({ data, display }) {
   );
 }
 
+function AnalyticsPanel({ analytics, display }) {
+  return (
+    <section className="analytics-panel">
+      <SectionHeader title={display('Cycle Analytics')} subtitle={display('Patterns from saved cycle dates and daily check-ins')} />
+      <div className="analytics-metrics">
+        <Metric title="Average cycle" value={`${analytics.averageCycle} days`} icon="cycle" />
+        <Metric title="Period regularity" value={analytics.regularity} icon="chart" />
+        <Metric title="Average sleep" value={analytics.averageSleep === '--' ? '--' : `${analytics.averageSleep} hrs`} icon="moon" />
+        <Metric title="Average water" value={analytics.averageWater === '--' ? '--' : `${analytics.averageWater} glasses`} icon="water" />
+      </div>
+      <div className="trend-grid">
+        <TrendList title="Mood trend" items={analytics.moodCounts} fallback="Save daily check-ins to see mood trends." />
+        <TrendList title="Symptom trend" items={analytics.symptomCounts} fallback="Save symptoms to see recurring patterns." />
+      </div>
+      <p className="analytics-note">Patterns show what appeared together in your logs. They do not establish a medical cause.</p>
+    </section>
+  );
+}
+
+function TrendList({ title, items, fallback }) {
+  const largest = Math.max(...items.map((item) => item.count), 1);
+  return (
+    <article className="trend-card">
+      <h3>{title}</h3>
+      {items.length === 0 && <p className="muted">{fallback}</p>}
+      {items.map((item) => (
+        <div className="trend-row" key={item.label}>
+          <div><span>{item.label}</span><strong>{item.count}</strong></div>
+          <div className="trend-track"><span style={{ width: `${(item.count / largest) * 100}%` }} /></div>
+        </div>
+      ))}
+    </article>
+  );
+}
+
 function Metric({ title, value, icon }) {
   return (
     <article className="metric-card">
@@ -1088,7 +1470,17 @@ function Icon({ name }) {
     mail: 'M4 6h16v12H4V6ZM4 7l8 6 8-6',
     lock: 'M7 10V8a5 5 0 0 1 10 0v2M6 10h12v10H6V10ZM12 14v3',
     unlock: 'M7 10V8a5 5 0 0 1 9.5-2.2M6 10h12v10H6V10ZM12 14v3',
-    leaf: 'M5 19c8 0 14-6 14-14-8 0-14 6-14 14ZM5 19c0-5 3-9 8-11'
+    leaf: 'M5 19c8 0 14-6 14-14-8 0-14 6-14 14ZM5 19c0-5 3-9 8-11',
+    water: 'M12 3s6 6.2 6 11a6 6 0 0 1-12 0c0-4.8 6-11 6-11Z M9 15c.5 1.2 1.5 2 3 2',
+    moon: 'M20 15.5A8 8 0 0 1 8.5 4 8 8 0 1 0 20 15.5Z',
+    pill: 'M8.5 4.5a4 4 0 0 1 5.7 0l5.3 5.3a4 4 0 0 1-5.7 5.7l-5.3-5.3a4 4 0 0 1 0-5.7ZM11 13l5-5',
+    bell: 'M6 17h12l-1.5-2v-4a4.5 4.5 0 0 0-9 0v4L6 17ZM10 20h4',
+    cloud: 'M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 11a3.5 3.5 0 0 0 1 7Z',
+    download: 'M12 4v11M8 11l4 4 4-4M5 20h14',
+    chart: 'M5 20V10M12 20V4M19 20v-7M3 20h18',
+    plus: 'M12 5v14M5 12h14',
+    minus: 'M5 12h14',
+    close: 'm7 7 10 10M17 7 7 17'
   };
 
   return (
@@ -1138,6 +1530,7 @@ function buildMonth(stats, profile) {
 function buildSummary(data, stats, confidence) {
   const signature = getCycleSignature(data, stats);
   const topSignals = getTopSignals(data);
+  const analytics = getCycleAnalytics(data);
   const patientName =
     data.settings.clinician.patientName?.trim() || data.settings.patientName?.trim() || data.settings.clinician.name?.trim();
 
@@ -1150,6 +1543,8 @@ function buildSummary(data, stats, confidence) {
     `Signature note: ${signature.detail}`,
     `Last cycle start: ${data.profile.lastPeriodStart || 'Not added'}`,
     `Average cycle length: ${data.profile.cycleLength} days`,
+    `Calculated cycle average: ${analytics.averageCycle} days`,
+    `Period regularity: ${analytics.regularity}`,
     `Period length: ${data.profile.periodLength} days`,
     `Current cycle day: ${stats.ready ? stats.cycleDay : 'Not available'}`,
     `Next expected period: ${formatDate(stats.nextPeriod)}`,
@@ -1158,6 +1553,8 @@ function buildSummary(data, stats, confidence) {
     `Recent mood: ${data.todayLog.mood}`,
     `Flow level: ${data.todayLog.flow}`,
     `Symptoms: ${data.todayLog.symptoms.join(', ') || 'None logged'}`,
+    `Water today: ${data.todayLog.waterGlasses || 0} glasses`,
+    `Sleep: ${data.todayLog.sleepHours || 'Not logged'}${data.todayLog.sleepHours ? ' hours' : ''}`,
     `Common recent body signals: ${topSignals.join(', ') || 'Not enough entries yet'}`,
     `Notes: ${data.todayLog.notes || 'None'}`,
     `Cycle confidence score: ${confidence}%`,

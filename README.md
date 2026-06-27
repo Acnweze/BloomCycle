@@ -8,8 +8,13 @@ BloomCycle is a mobile-first React app for privately tracking periods, estimated
 - Calendar visualization for period and fertility estimates
 - Symptom, mood, flow, and notes tracking
 - Body Signal Journal for cramps, cravings, sleep, energy, acne, headache, mood, and stress
+- Daily care check-in for water, sleep, medication completion, mood, symptoms, flow, and notes
 - Today's Body Insight and phase-based self-care suggestions
 - Cycle Confidence Score and Cycle Signature
+- Cycle analytics for average length, regularity, mood, symptoms, sleep, and water
+- Browser reminders for estimated periods and user-entered medication schedules
+- PDF cycle and care reports
+- Optional per-account cloud backup and restore
 - Copyable partner or gynecologist summary using patient details
 - Private Mode for less sensitive on-screen wording
 - Email, username, and password registration
@@ -38,9 +43,11 @@ Open `http://localhost:5173/`.
 1. Create a project in the [Firebase console](https://console.firebase.google.com/).
 2. Add a Web app to the Firebase project.
 3. In **Authentication > Sign-in method**, enable **Email/Password**.
-4. Copy `.env.example` to `.env`.
-5. Replace the example values with the Web app configuration from Firebase.
-6. Restart `npm run dev` after changing `.env`.
+4. Create a Cloud Firestore database.
+5. Copy `.env.example` to `.env`.
+6. Replace the example values with the Web app configuration from Firebase.
+7. Publish the included `firestore.rules` in the Firebase console, or deploy them with Firebase CLI.
+8. Restart `npm run dev` after changing `.env`.
 
 ```env
 VITE_FIREBASE_API_KEY=your_firebase_api_key
@@ -51,6 +58,8 @@ VITE_FIREBASE_APP_ID=your_firebase_app_id
 
 The `.env` file is ignored by Git and must not be committed.
 
+The included Firestore rules allow each authenticated user to access only documents below their own user ID. Do not enable open development rules for production.
+
 ## Production Build
 
 ```bash
@@ -59,7 +68,9 @@ npm run build
 
 ## Privacy and Security
 
-Firebase Authentication manages account passwords, login sessions, and reset emails. BloomCycle cycle records remain in the current browser and are not synchronized across devices. Firebase Web configuration identifies the Firebase project; access must still be protected with Firebase Authentication settings and security rules.
+Firebase Authentication manages account passwords, login sessions, and reset emails. Cycle records remain local unless the user enables or manually starts cloud backup. Cloud documents are stored beneath the authenticated user's Firebase UID and must be protected by the included Firestore rules.
+
+Browser reminders work while BloomCycle is open. Reliable closed-app reminders require a deployed push-notification service and explicit user permission.
 
 ## Medical Disclaimer
 
