@@ -161,9 +161,9 @@ function loadStoredData() {
 }
 ```
 
-By default, cycle data stays in the same browser. Clearing browser data can delete it. Firebase stores account credentials and sessions, while cycle records are uploaded only when the user chooses cloud backup.
+By default, health data stays in the same browser. Clearing browser data can delete it. Firebase stores account credentials and sessions, while health records are uploaded only when the user enables Secure Cloud Sync.
 
-When cloud backup is enabled, BloomCycle also writes a copy beneath `users/{uid}/backups/cycleData` in Cloud Firestore. The included security rules require the signed-in user ID to match the document owner. Local tracking remains available when cloud backup is disabled or unavailable.
+When Secure Cloud Sync is enabled, BloomCycle writes a copy beneath `users/{uid}/backups/cycleData` in Cloud Firestore. After login, it reconciles newer local or cloud data and merges dated records before syncing later changes. The included security rules require the signed-in user ID to match the document owner. Local tracking remains available when sync is disabled or unavailable.
 
 ## 7. Updating React State
 
@@ -471,7 +471,7 @@ npm run preview
 
 Before using BloomCycle as a real multi-device product, add:
 
-1. An encrypted database if cross-device cycle synchronization is added.
+1. Optional field-level or end-to-end encryption if the product threat model requires protection beyond Firebase's account and infrastructure controls.
 2. Proper account registration, password recovery, and session expiration.
 3. HTTPS and server-side authorization.
 4. Optional encrypted export and backup.

@@ -34,7 +34,7 @@ export function getReminderPermission() {
   return Notification.permission;
 }
 
-export function checkDueReminders(data, stats) {
+export function checkDueReminders(data, stats, pregnancyStats) {
   if (!data.settings.reminderEnabled) return;
   const now = new Date();
   const dateKey = localDateKey(now);
@@ -51,15 +51,81 @@ export function checkDueReminders(data, stats) {
     }
   });
 
-  if (stats.ready && stats.nextPeriod) {
-    const daysUntil = Math.ceil((stats.nextPeriod - stats.today) / 86400000);
-    const reminderDays = Number(data.settings.periodReminderDays) || 2;
-    if (daysUntil === reminderDays) {
+  (data.settings.smartReminders || []).forEach((reminder) => {
+    if (!reminder.enabled || reminder.time !== time) return;
+
+    if (reminder.type === 'period' && stats.ready && stats.nextPeriod) {
+      const daysUntil = calendarDaysBetween(now, stats.nextPeriod);
+      if (daysUntil === Number(reminder.daysBefore || 0)) {
+        notifyOnce(
+          `smart-${reminder.id}-${localDateKey(stats.nextPeriod)}`,
+          reminder.label || 'Period estimate',
+          `Your next period is estimated ${formatEstimateTiming(daysUntil)}. Predictions can vary.`
+        );
+      }
+      return;
+    }
+
+    if (reminder.type === 'ovulation' && stats.ready && stats.ovulation) {
+      let nextOvulation = stats.ovulation;
+      if (calendarDaysBetween(now, nextOvulation) < 0) {
+        nextOvulation = addDays(nextOvulation, Number(data.profile.cycleLength) || 28);
+      }
+      const daysUntil = calendarDaysBetween(now, nextOvulation);
+      if (daysUntil === Number(reminder.daysBefore || 0)) {
+        notifyOnce(
+          `smart-${reminder.id}-${localDateKey(nextOvulation)}`,
+          reminder.label || 'Ovulation estimate',
+          `Ovulation is estimated ${formatEstimateTiming(daysUntil)}. Cycle predictions can vary.`
+        );
+      }
+      return;
+    }
+
+    if (reminder.type === 'pregnancy' && pregnancyStats?.ready) {
+      const milestoneWeek = Number(reminder.milestoneWeek);
+      if (pregnancyStats.developmentWeek === milestoneWeek) {
+        notifyOnce(
+          `smart-${reminder.id}-${localDateKey(pregnancyStats.lmp)}-week-${milestoneWeek}`,
+          reminder.label || `Week ${milestoneWeek} milestone`,
+          `Your tracker has reached estimated pregnancy week ${milestoneWeek}. Dates can vary.`
+        );
+      }
+      return;
+    }
+
+    if (reminder.type === 'hydration') {
       notifyOnce(
-        `period-${localDateKey(stats.nextPeriod)}`,
-        'Cycle reminder',
-        `Your next period is estimated in ${reminderDays} day${reminderDays === 1 ? '' : 's'}. Predictions can vary.`
+        `smart-${reminder.id}-${dateKey}`,
+        reminder.label || 'Hydration check',
+        'A gentle reminder to check in with your hydration.'
+      );
+      return;
+    }
+
+    if (reminder.type === 'wellness') {
+      notifyOnce(
+        `smart-${reminder.id}-${dateKey}`,
+        reminder.label || 'Daily wellness check-in',
+        'Take a moment for your BloomCycle daily wellness check-in.'
       );
     }
-  }
+  });
+}
+
+function calendarDaysBetween(start, end) {
+  const startUtc = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate());
+  const endUtc = Date.UTC(end.getFullYear(), end.getMonth(), end.getDate());
+  return Math.floor((endUtc - startUtc) / 86400000);
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function formatEstimateTiming(days) {
+  if (days === 0) return 'today';
+  return `in ${days} day${days === 1 ? '' : 's'}`;
 }

@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
+  deleteCloudBackup,
   firebaseConfigured,
   getAuthMessage,
-  loadCloudBackup,
+  loadCloudBackupRecord,
   observeAuth,
   registerAccount,
   saveCloudBackup,
@@ -54,8 +55,10 @@ const defaultData = {
     weeklyNotes: []
   },
   settings: {
+    onboardingCompleted: false,
     reminderEnabled: true,
     periodReminderDays: 2,
+    smartReminders: [],
     medications: [],
     cloudBackupEnabled: false,
     privacyName: 'Bloom',
@@ -274,11 +277,79 @@ function normalizeData(parsed) {
     settings: {
       ...defaultData.settings,
       ...parsed?.settings,
+      onboardingCompleted: typeof parsed?.settings?.onboardingCompleted === 'boolean'
+        ? parsed.settings.onboardingCompleted
+        : true,
+      smartReminders: Array.isArray(parsed?.settings?.smartReminders)
+        ? parsed.settings.smartReminders
+        : [{
+            id: 'legacy-period',
+            type: 'period',
+            label: 'Period estimate',
+            time: '09:00',
+            daysBefore: Number(parsed?.settings?.periodReminderDays) || 2,
+            enabled: true
+          }],
       medications: parsed?.settings?.medications || [],
       clinician: { ...defaultData.settings.clinician, ...parsed?.settings?.clinician },
       phaseNotes: { ...defaultData.settings.phaseNotes, ...parsed?.settings?.phaseNotes }
     }
   };
+}
+
+function mergeSyncData(localData, cloudData, preferCloud) {
+  const local = normalizeData(localData);
+  const cloud = normalizeData(cloudData);
+  const preferred = preferCloud ? cloud : local;
+  const secondary = preferCloud ? local : cloud;
+  const mergeByKey = (preferredItems, secondaryItems, getKey) => {
+    const merged = new Map((secondaryItems || []).map((item) => [getKey(item), item]));
+    (preferredItems || []).forEach((item) => merged.set(getKey(item), item));
+    return [...merged.values()];
+  };
+  const latestTodayLog = cloud.todayLog.date > local.todayLog.date
+    ? cloud.todayLog
+    : local.todayLog.date > cloud.todayLog.date
+      ? local.todayLog
+      : preferred.todayLog;
+
+  return {
+    ...preferred,
+    profile: {
+      ...preferred.profile,
+      periodStarts: [...new Set([...(local.profile.periodStarts || []), ...(cloud.profile.periodStarts || [])])].sort()
+    },
+    todayLog: latestTodayLog,
+    journal: mergeByKey(preferred.journal, secondary.journal, (entry) => entry.date)
+      .sort((a, b) => b.date.localeCompare(a.date)),
+    dailyLogs: mergeByKey(preferred.dailyLogs, secondary.dailyLogs, (entry) => entry.date)
+      .sort((a, b) => b.date.localeCompare(a.date)),
+    pregnancy: {
+      ...preferred.pregnancy,
+      weeklyNotes: mergeByKey(
+        preferred.pregnancy.weeklyNotes,
+        secondary.pregnancy.weeklyNotes,
+        (entry) => entry.week
+      ).sort((a, b) => b.week - a.week)
+    },
+    settings: {
+      ...preferred.settings,
+      medications: mergeByKey(
+        preferred.settings.medications,
+        secondary.settings.medications,
+        (entry) => entry.id
+      ),
+      smartReminders: mergeByKey(
+        preferred.settings.smartReminders,
+        secondary.settings.smartReminders,
+        (entry) => entry.id
+      )
+    }
+  };
+}
+
+function getSyncTimestampKey(storageKey) {
+  return `${storageKey}:updated-at`;
 }
 
 function loadStoredData(storageKey = STORAGE_KEY) {
@@ -338,26 +409,90 @@ function App({ currentUser, onSignOut }) {
   const [data, setData] = useState(() => loadStoredData(storageKey));
   const [copied, setCopied] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [cloudStatus, setCloudStatus] = useState('Local only');
+  const [cloudStatus, setCloudStatus] = useState('Checking...');
+  const [cloudReady, setCloudReady] = useState(false);
+  const initialData = useRef(data);
   const [notificationPermission, setNotificationPermission] = useState(getReminderPermission);
   const stats = useMemo(() => getCycleStats(data.profile), [data.profile]);
   const confidence = useMemo(() => getConfidenceScore(data), [data]);
   const signature = useMemo(() => getCycleSignature(data, stats), [data, stats]);
   const analytics = useMemo(() => getCycleAnalytics(data), [data]);
+  const pregnancyStats = useMemo(() => getPregnancyStats(data.pregnancy), [data.pregnancy]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    const hydrateCloudData = async () => {
+      if (!firebaseConfigured) {
+        setCloudStatus('Local only');
+        setCloudReady(true);
+        return;
+      }
+
+      setCloudReady(false);
+      setCloudStatus('Checking cloud...');
+      try {
+        const cloudRecord = await loadCloudBackupRecord(currentUser.uid);
+        if (cancelled) return;
+
+        const localData = initialData.current;
+        const localExists = localStorage.getItem(storageKey) !== null;
+        const localUpdatedAt = Number(localStorage.getItem(getSyncTimestampKey(storageKey))) || 0;
+
+        if (cloudRecord?.data) {
+          const cloudData = normalizeData(cloudRecord.data);
+          const syncEnabled = Boolean(
+            localData.settings.cloudBackupEnabled || cloudData.settings.cloudBackupEnabled
+          );
+
+          if (syncEnabled) {
+            const preferCloud = !localExists || cloudRecord.updatedAt > localUpdatedAt;
+            const merged = mergeSyncData(localData, cloudData, preferCloud);
+            merged.settings.cloudBackupEnabled = true;
+            setData(merged);
+            localStorage.setItem(
+              getSyncTimestampKey(storageKey),
+              String(Math.max(localUpdatedAt, cloudRecord.updatedAt))
+            );
+            setCloudStatus('Synced after login');
+          } else {
+            setCloudStatus('Sync off');
+          }
+        } else if (localData.settings.cloudBackupEnabled) {
+          await saveCloudBackup(currentUser.uid, localData);
+          if (!cancelled) setCloudStatus('First sync complete');
+        } else {
+          setCloudStatus('Sync off');
+        }
+      } catch {
+        if (!cancelled) setCloudStatus('Cloud unavailable');
+      } finally {
+        if (!cancelled) setCloudReady(true);
+      }
+    };
+
+    hydrateCloudData();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser.uid, storageKey]);
+
+  useEffect(() => {
+    if (!cloudReady) return undefined;
+    const updatedAt = Date.now();
     localStorage.setItem(storageKey, JSON.stringify(data));
-  }, [data, storageKey]);
+    localStorage.setItem(getSyncTimestampKey(storageKey), String(updatedAt));
 
-  useEffect(() => {
-    checkDueReminders(data, stats);
-    const reminderTimer = setInterval(() => checkDueReminders(data, stats), 30000);
-    return () => clearInterval(reminderTimer);
-  }, [data, stats]);
+    if (!firebaseConfigured) {
+      setCloudStatus('Local only');
+      return undefined;
+    }
+    if (!data.settings.cloudBackupEnabled) {
+      setCloudStatus('Sync off');
+      return undefined;
+    }
 
-  useEffect(() => {
-    if (!data.settings.cloudBackupEnabled) return undefined;
-    setCloudStatus('Saving...');
+    setCloudStatus('Syncing...');
     const cloudTimer = setTimeout(async () => {
       try {
         await saveCloudBackup(currentUser.uid, data);
@@ -367,7 +502,13 @@ function App({ currentUser, onSignOut }) {
       }
     }, 1200);
     return () => clearTimeout(cloudTimer);
-  }, [currentUser.uid, data]);
+  }, [cloudReady, currentUser.uid, data, storageKey]);
+
+  useEffect(() => {
+    checkDueReminders(data, stats, pregnancyStats);
+    const reminderTimer = setInterval(() => checkDueReminders(data, stats, pregnancyStats), 30000);
+    return () => clearInterval(reminderTimer);
+  }, [data, stats, pregnancyStats]);
 
   const updateProfile = (field, value) => {
     setData((current) => ({
@@ -464,25 +605,66 @@ function App({ currentUser, onSignOut }) {
   };
 
   const backUpNow = async () => {
-    setCloudStatus('Saving...');
+    setCloudStatus('Syncing...');
     try {
       await saveCloudBackup(currentUser.uid, data);
-      setCloudStatus('Backup complete');
+      localStorage.setItem(getSyncTimestampKey(storageKey), String(Date.now()));
+      setCloudStatus('Sync complete');
     } catch {
       setCloudStatus('Cloud unavailable');
     }
   };
 
   const restoreBackup = async () => {
-    setCloudStatus('Checking backup...');
+    setCloudStatus('Checking cloud...');
     try {
-      const restored = await loadCloudBackup(currentUser.uid);
-      if (!restored) {
-        setCloudStatus('No backup found');
+      const cloudRecord = await loadCloudBackupRecord(currentUser.uid);
+      if (!cloudRecord?.data) {
+        setCloudStatus('No cloud data found');
         return;
       }
-      setData(normalizeData(restored));
-      setCloudStatus('Backup restored');
+      const merged = mergeSyncData(data, cloudRecord.data, true);
+      merged.settings.cloudBackupEnabled = data.settings.cloudBackupEnabled;
+      setData(merged);
+      localStorage.setItem(getSyncTimestampKey(storageKey), String(cloudRecord.updatedAt || Date.now()));
+      setCloudStatus('Cloud data merged');
+    } catch {
+      setCloudStatus('Cloud unavailable');
+    }
+  };
+
+  const updateCloudSync = async (enabled) => {
+    const nextData = {
+      ...data,
+      settings: { ...data.settings, cloudBackupEnabled: enabled }
+    };
+    setData(nextData);
+
+    if (!firebaseConfigured) {
+      setCloudStatus('Firebase setup required');
+      return;
+    }
+    if (!enabled) {
+      try {
+        await saveCloudBackup(currentUser.uid, nextData);
+        setCloudStatus('Sync off');
+      } catch {
+        setCloudStatus('Cloud unavailable');
+      }
+    }
+  };
+
+  const removeCloudData = async () => {
+    const nextData = {
+      ...data,
+      settings: { ...data.settings, cloudBackupEnabled: false }
+    };
+    setData(nextData);
+    setCloudStatus('Deleting cloud data...');
+    try {
+      await deleteCloudBackup(currentUser.uid);
+      localStorage.removeItem(getSyncTimestampKey(storageKey));
+      setCloudStatus('Cloud data deleted');
     } catch {
       setCloudStatus('Cloud unavailable');
     }
@@ -494,6 +676,39 @@ function App({ currentUser, onSignOut }) {
   };
 
   const display = (text) => (data.profile.privateMode ? maskSensitive(text) : text);
+
+  const completeOnboarding = (setup) => {
+    setData((current) => ({
+      ...current,
+      profile: {
+        ...current.profile,
+        lastPeriodStart: setup.lastPeriodStart,
+        periodStarts: setup.lastPeriodStart
+          ? [...new Set([...(current.profile.periodStarts || []), setup.lastPeriodStart])].sort()
+          : current.profile.periodStarts,
+        cycleLength: setup.cycleLength,
+        periodLength: setup.periodLength,
+        privateMode: setup.privateMode
+      },
+      settings: {
+        ...current.settings,
+        onboardingCompleted: true,
+        reminderEnabled: setup.reminderEnabled,
+        cloudBackupEnabled: firebaseConfigured && setup.cloudSyncEnabled
+      }
+    }));
+  };
+
+  if (!data.settings.onboardingCompleted) {
+    return (
+      <OnboardingExperience
+        currentUser={currentUser.name}
+        initialProfile={data.profile}
+        initialSettings={data.settings}
+        onComplete={completeOnboarding}
+      />
+    );
+  }
 
   return (
     <div className={data.profile.privateMode ? 'app private-mode' : 'app'}>
@@ -568,18 +783,28 @@ function App({ currentUser, onSignOut }) {
             currentUser={currentUser.name}
             storageKey={storageKey}
             cloudStatus={cloudStatus}
+            cloudReady={cloudReady}
             notificationPermission={notificationPermission}
             enableNotifications={enableNotifications}
             backUpNow={backUpNow}
             restoreBackup={restoreBackup}
+            updateCloudSync={updateCloudSync}
+            removeCloudData={removeCloudData}
             onSignOut={onSignOut}
           />
         )}
+        {activePage === 'privacy' && <LegalPage type="privacy" onBack={() => setActivePage('settings')} />}
+        {activePage === 'terms' && <LegalPage type="terms" onBack={() => setActivePage('settings')} />}
       </main>
 
       <p className="disclaimer">
         This app is for tracking and educational purposes only. It should not replace medical advice.
       </p>
+      <div className="legal-links" aria-label="Legal information">
+        <button type="button" onClick={() => setActivePage('privacy')}>Privacy Policy</button>
+        <span aria-hidden="true">•</span>
+        <button type="button" onClick={() => setActivePage('terms')}>Terms of Use</button>
+      </div>
 
       <nav className="bottom-nav" aria-label="Main navigation">
         {navItems.map((item) => (
@@ -598,6 +823,451 @@ function App({ currentUser, onSignOut }) {
   );
 }
 
+function OnboardingExperience({ currentUser, initialProfile, initialSettings, onComplete }) {
+  const [step, setStep] = useState(0);
+  const [setup, setSetup] = useState({
+    lastPeriodStart: initialProfile.lastPeriodStart || '',
+    cycleLength: Number(initialProfile.cycleLength) || 28,
+    periodLength: Number(initialProfile.periodLength) || 5,
+    privateMode: Boolean(initialProfile.privateMode),
+    reminderEnabled: Boolean(initialSettings.reminderEnabled),
+    cloudSyncEnabled: firebaseConfigured && Boolean(initialSettings.cloudBackupEnabled)
+  });
+  const firstName = currentUser?.trim().split(/\s+/)[0] || 'there';
+  const steps = ['Welcome', 'Health profile', 'Preferences'];
+
+  const updateSetup = (field, value) => {
+    setSetup((current) => ({ ...current, [field]: value }));
+  };
+
+  const submitStep = (event) => {
+    event.preventDefault();
+    if (step < steps.length - 1) {
+      setStep((current) => current + 1);
+      return;
+    }
+    onComplete(setup);
+  };
+
+  return (
+    <main className="onboarding-shell">
+      <section className="onboarding-card">
+        <header className="onboarding-header">
+          <div className="auth-brand">
+            <BloomLogo />
+            <div>
+              <p className="eyebrow">Your health, your rhythm</p>
+              <h1>BloomCycle</h1>
+            </div>
+          </div>
+          <button className="onboarding-skip" type="button" onClick={() => onComplete(setup)}>
+            Skip setup
+          </button>
+        </header>
+
+        <div className="onboarding-progress" aria-label={`Onboarding step ${step + 1} of ${steps.length}`}>
+          {steps.map((label, index) => (
+            <div className={index <= step ? 'active' : ''} key={label} aria-current={index === step ? 'step' : undefined}>
+              <i>{index + 1}</i>
+              <span>{label}</span>
+            </div>
+          ))}
+        </div>
+
+        <form className="onboarding-content" onSubmit={submitStep}>
+          {step === 0 && (
+            <div className="onboarding-welcome">
+              <div>
+                <p className="onboarding-kicker">Welcome, {firstName}</p>
+                <h2>Meet your private health companion.</h2>
+                <p>Track patterns, prepare for appointments, and keep the information that matters in one calm space.</p>
+              </div>
+              <div className="onboarding-feature-grid">
+                <article>
+                  <Icon name="calendar" />
+                  <strong>Cycle insights</strong>
+                  <span>Period, ovulation, symptoms, and calendar estimates.</span>
+                </article>
+                <article>
+                  <Icon name="pregnant" />
+                  <strong>Pregnancy tracker</strong>
+                  <span>Weekly progress, development summaries, and notes.</span>
+                </article>
+                <article>
+                  <Icon name="bell" />
+                  <strong>Smart reminders</strong>
+                  <span>Personal schedules for wellness, medication, and milestones.</span>
+                </article>
+              </div>
+              <p className="onboarding-privacy"><Icon name="lock" /> Your entries stay local unless you choose Secure Cloud Sync.</p>
+            </div>
+          )}
+
+          {step === 1 && (
+            <div className="onboarding-form-step">
+              <div className="section-header compact">
+                <h2>Set up your cycle profile</h2>
+                <p>These details power your cycle estimates. You can change them later in the Dashboard.</p>
+              </div>
+              <label>
+                <span>Last period start <small>(optional)</small></span>
+                <input
+                  type="date"
+                  max={isoDate(new Date())}
+                  value={setup.lastPeriodStart}
+                  onChange={(event) => updateSetup('lastPeriodStart', event.target.value)}
+                />
+              </label>
+              <div className="two-col onboarding-cycle-fields">
+                <label>
+                  <span>Typical cycle length</span>
+                  <input
+                    type="number"
+                    min="18"
+                    max="45"
+                    required
+                    value={setup.cycleLength}
+                    onChange={(event) => updateSetup('cycleLength', Number(event.target.value))}
+                  />
+                </label>
+                <label>
+                  <span>Typical period length</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="12"
+                    required
+                    value={setup.periodLength}
+                    onChange={(event) => updateSetup('periodLength', Number(event.target.value))}
+                  />
+                </label>
+              </div>
+              <p className="onboarding-note">Estimates are educational and can vary from your actual cycle.</p>
+            </div>
+          )}
+
+          {step === 2 && (
+            <div className="onboarding-form-step">
+              <div className="section-header compact">
+                <h2>Choose your preferences</h2>
+                <p>You stay in control. These settings can be changed at any time.</p>
+              </div>
+              <label className="switch-row">
+                <span>
+                  <strong>Smart Health Reminders</strong>
+                  <small>Prepare reminder schedules now and allow browser notifications later in Settings.</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={setup.reminderEnabled}
+                  onChange={(event) => updateSetup('reminderEnabled', event.target.checked)}
+                />
+              </label>
+              <label className="switch-row">
+                <span>
+                  <strong>Private Mode</strong>
+                  <small>Use less sensitive wording and blur personal details on screen.</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={setup.privateMode}
+                  onChange={(event) => updateSetup('privateMode', event.target.checked)}
+                />
+              </label>
+              <label className="switch-row">
+                <span>
+                  <strong>Secure Cloud Sync</strong>
+                  <small>
+                    {firebaseConfigured
+                      ? 'Automatically merge your records across signed-in devices.'
+                      : 'Available after Firebase is configured for this deployment.'}
+                  </small>
+                </span>
+                <input
+                  type="checkbox"
+                  disabled={!firebaseConfigured}
+                  checked={setup.cloudSyncEnabled}
+                  onChange={(event) => updateSetup('cloudSyncEnabled', event.target.checked)}
+                />
+              </label>
+            </div>
+          )}
+
+          <footer className="onboarding-actions">
+            <button
+              className="outline-btn"
+              type="button"
+              disabled={step === 0}
+              onClick={() => setStep((current) => Math.max(0, current - 1))}
+            >
+              Previous
+            </button>
+            <span>{step + 1} of {steps.length}</span>
+            <button className="primary-btn" type="submit">
+              {step === steps.length - 1 ? 'Open BloomCycle' : 'Continue'}
+            </button>
+          </footer>
+        </form>
+      </section>
+    </main>
+  );
+}
+
+function LegalPage({ type, onBack, publicView = false }) {
+  const isPrivacy = type === 'privacy';
+  const title = isPrivacy ? 'Privacy Policy' : 'Terms of Use';
+
+  return (
+    <main className={publicView ? 'legal-public-shell' : 'page legal-page'}>
+      <article className="legal-document">
+        <header className="legal-document-header">
+          <div className="auth-brand">
+            <BloomLogo />
+            <div>
+              <p className="eyebrow">BloomCycle</p>
+              <h1>{title}</h1>
+            </div>
+          </div>
+          <button className="outline-btn" type="button" onClick={onBack}>Back</button>
+        </header>
+
+        <p className="legal-effective-date">Effective and last updated: June 27, 2026</p>
+
+        {isPrivacy ? (
+          <div className="legal-sections">
+            <LegalSection title="1. Our privacy commitment">
+              <p>
+                BloomCycle is designed to help you privately track cycle, pregnancy, wellness, medication, reminder,
+                and care information. This policy explains what information the app handles, why it is used, where it
+                is stored, and the controls available to you.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="2. Information you choose to provide">
+              <ul>
+                <li>Account information, such as email address and display name, when Firebase Authentication is enabled.</li>
+                <li>Cycle and pregnancy dates, symptoms, mood, flow, sleep, hydration, medications, reminders, and notes.</li>
+                <li>Optional patient and clinician-contact details used to prepare summaries or email drafts.</li>
+                <li>App preferences, notification choices, privacy settings, and cloud-sync settings.</li>
+              </ul>
+              <p>Do not enter information you do not want stored by the app.</p>
+            </LegalSection>
+
+            <LegalSection title="3. Where your information is stored">
+              <p>
+                Health entries are stored in your browser by default. They remain tied to that browser profile and may
+                be lost if browser storage is cleared. If Firebase is not configured, demo accounts and their data are
+                browser-only and should not be used for real sensitive information.
+              </p>
+              <p>
+                If you enable Secure Cloud Sync, BloomCycle stores a copy in Google Cloud Firestore beneath your
+                authenticated Firebase user ID. Sync is optional and can be disabled in Settings. Cloud Sync is not
+                end-to-end encrypted by BloomCycle.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="4. How information is used">
+              <ul>
+                <li>To calculate and display educational cycle, ovulation, pregnancy, and due-date estimates.</li>
+                <li>To save your logs, notes, preferences, analytics, reports, and personalized reminders.</li>
+                <li>To authenticate your account, restore a signed-in session, and synchronize data when you opt in.</li>
+                <li>To support features you request, such as PDF exports, copied summaries, or email drafts.</li>
+              </ul>
+              <p>BloomCycle does not sell your health information or use it for advertising.</p>
+            </LegalSection>
+
+            <LegalSection title="5. Notifications and device permissions">
+              <p>
+                Browser notifications are optional. Reminder schedules are stored with your app data, and notification
+                permission is controlled by your browser or device. Browser reminders generally run only while
+                BloomCycle is open; they are not emergency alerts.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="6. Service providers and disclosure">
+              <p>
+                When configured, BloomCycle relies on Google Firebase for authentication and optional Firestore storage.
+                Hosting providers may process routine technical request information under their own policies. Information
+                may also be disclosed when required by applicable law, to protect users, or to investigate abuse or a
+                security incident. BloomCycle does not intentionally share health entries with advertisers or data brokers.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="7. Security">
+              <p>
+                Firestore rules included with BloomCycle require an authenticated user ID to match the owner path before
+                cloud records can be read or written. Account passwords are handled by Firebase when Firebase is enabled.
+                No storage or transmission method is completely secure, and BloomCycle cannot guarantee absolute security.
+                Protect your device, browser profile, account password, and exported reports.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="8. Retention and your choices">
+              <ul>
+                <li>Use “Clear local data” to remove health records from the current browser.</li>
+                <li>Use “Delete my cloud data” to delete the synced Firestore health-record document.</li>
+                <li>Disable Secure Cloud Sync or browser notifications at any time.</li>
+                <li>PDFs, clipboard copies, and email drafts leave BloomCycle’s storage controls once exported or shared.</li>
+              </ul>
+              <p>
+                Deleting health records does not automatically delete a Firebase Authentication account. Account-deletion
+                assistance may be requested through the project contact below.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="9. Consumer health-app notice">
+              <p>
+                BloomCycle is a consumer educational tracker, not a healthcare provider, insurer, or medical-record system.
+                Do not assume information in BloomCycle is protected by HIPAA. Other privacy or breach-notification laws
+                may apply depending on the operator, deployment, location, and use of the service.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="10. Children’s privacy">
+              <p>
+                BloomCycle is not directed to children under 13. Users must meet the minimum age required by applicable
+                law, and minors should use the service only with any consent required from a parent or guardian.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="11. Medical disclaimer">
+              <p>
+                BloomCycle provides estimates and educational information only. It does not diagnose, prevent, or treat
+                any condition and is not a substitute for professional medical advice. Seek qualified care for personal
+                guidance. For severe symptoms or an emergency, contact local emergency services immediately.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="12. Changes and contact">
+              <p>
+                This policy may be updated as BloomCycle changes. The effective date above identifies the current version.
+                BloomCycle was designed and developed by Agatha Nweze. Questions or account-deletion requests can be
+                submitted through the{' '}
+                <a href="https://github.com/Acnweze/BloomCycle" target="_blank" rel="noreferrer">BloomCycle GitHub repository</a>.
+                Do not post health information, passwords, or other sensitive details in a public issue.
+              </p>
+            </LegalSection>
+          </div>
+        ) : (
+          <div className="legal-sections">
+            <LegalSection title="1. Acceptance of these terms">
+              <p>
+                By accessing or using BloomCycle, you agree to these Terms of Use and acknowledge the Privacy Policy.
+                If you do not agree, do not use the application.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="2. Eligibility and account responsibility">
+              <p>
+                You must be legally permitted to use the service and meet any minimum age required where you live.
+                You are responsible for accurate account information, safeguarding your password and devices, and all
+                activity under your account. Notify the project maintainer if you suspect unauthorized access.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="3. Educational purpose only">
+              <p>
+                BloomCycle is a personal tracking and educational tool. It is not a healthcare provider, medical device,
+                diagnostic service, emergency service, or substitute for a doctor, midwife, pharmacist, or other qualified
+                professional. Using BloomCycle does not create a clinician–patient relationship.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="4. Estimates are not guarantees">
+              <p>
+                Period, ovulation, fertile-window, pregnancy-week, due-date, development, and reminder information is
+                estimated from user-entered data and general assumptions. Bodies and pregnancies vary. Do not use these
+                estimates as contraception, to confirm pregnancy, or to make urgent or high-risk medical decisions.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="5. Medication and wellness features">
+              <p>
+                Medication reminders are organizational tools only and do not provide dosing instructions. Follow the
+                directions of your clinician or pharmacist. Hydration and self-care content is general information and
+                may not be suitable for every person or condition.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="6. Your content and exports">
+              <p>
+                You retain responsibility for the information you enter. You grant the application permission to process
+                that information only as needed to provide selected features. You are responsible for deciding whether and
+                how to share generated PDFs, clipboard summaries, and email drafts.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="7. Acceptable use">
+              <ul>
+                <li>Do not attempt to access another user’s account or cloud records.</li>
+                <li>Do not bypass security controls, disrupt the service, or introduce harmful code.</li>
+                <li>Do not use BloomCycle for unlawful, deceptive, abusive, or rights-infringing activity.</li>
+                <li>Do not present BloomCycle estimates as professional medical conclusions.</li>
+              </ul>
+            </LegalSection>
+
+            <LegalSection title="8. Third-party services">
+              <p>
+                Firebase, hosting providers, browsers, email clients, and device notification services may have separate
+                terms and privacy practices. BloomCycle is not responsible for third-party services outside its control.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="9. Availability and changes">
+              <p>
+                Features may change, be suspended, or become unavailable. Local data can be lost when browser storage is
+                cleared, and cloud or notification features depend on configuration, connectivity, permissions, and
+                third-party availability. Keep independent copies of information you cannot afford to lose.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="10. Disclaimer of warranties">
+              <p>
+                To the extent permitted by law, BloomCycle is provided “as is” and “as available,” without warranties that
+                it will be uninterrupted, error-free, medically accurate, or suitable for a particular purpose. Rights
+                that cannot legally be excluded remain unaffected.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="11. Limitation of liability">
+              <p>
+                To the extent permitted by law, the project author and contributors are not liable for indirect,
+                incidental, consequential, or special losses arising from use of or reliance on BloomCycle. Nothing in
+                these terms excludes liability that applicable law does not permit to be excluded.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="12. Medical emergencies">
+              <p>
+                Do not wait for an app reminder or response. If you believe you may have a medical emergency, severe
+                symptoms, pregnancy complications, or risk of harm, contact local emergency services or urgent medical
+                care immediately.
+              </p>
+            </LegalSection>
+
+            <LegalSection title="13. Updates and contact">
+              <p>
+                Continued use after updated terms become effective indicates acceptance where permitted by law. Questions
+                can be submitted through the{' '}
+                <a href="https://github.com/Acnweze/BloomCycle" target="_blank" rel="noreferrer">BloomCycle GitHub repository</a>.
+              </p>
+            </LegalSection>
+          </div>
+        )}
+      </article>
+    </main>
+  );
+}
+
+function LegalSection({ title, children }) {
+  return (
+    <section>
+      <h2>{title}</h2>
+      {children}
+    </section>
+  );
+}
+
 function AuthGate({ onAuthenticated }) {
   const [mode, setMode] = useState('login');
   const [email, setEmail] = useState('');
@@ -607,6 +1277,7 @@ function AuthGate({ onAuthenticated }) {
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState('error');
   const [busy, setBusy] = useState(false);
+  const [legalPage, setLegalPage] = useState('');
 
   const submitAuth = async (event) => {
     event.preventDefault();
@@ -676,6 +1347,10 @@ function AuthGate({ onAuthenticated }) {
       : mode === 'reset'
         ? 'Send reset email'
         : 'Sign in';
+
+  if (legalPage) {
+    return <LegalPage type={legalPage} onBack={() => setLegalPage('')} publicView />;
+  }
 
   return (
     <div className="auth-shell">
@@ -759,7 +1434,15 @@ function AuthGate({ onAuthenticated }) {
         </div>
 
         <p className="auth-note">
-          Firebase securely manages account passwords and reset emails. Your cycle logs remain stored only in this browser.
+          {firebaseConfigured
+            ? 'Firebase manages account passwords and reset emails. Health logs remain local unless you enable Secure Cloud Sync.'
+            : 'Demo accounts and health logs stay in this browser only. Do not reuse a real password or enter sensitive real-world information in demo mode.'}
+        </p>
+        <p className="auth-legal-copy">
+          By continuing, you acknowledge the{' '}
+          <button type="button" onClick={() => setLegalPage('terms')}>Terms of Use</button>
+          {' '}and confirm that you have reviewed the{' '}
+          <button type="button" onClick={() => setLegalPage('privacy')}>Privacy Policy</button>.
         </p>
       </section>
     </div>
@@ -1258,15 +1941,21 @@ function SettingsPage({
   currentUser,
   storageKey,
   cloudStatus,
+  cloudReady,
   notificationPermission,
   enableNotifications,
   backUpNow,
   restoreBackup,
+  updateCloudSync,
+  removeCloudData,
   onSignOut
 }) {
+  const [confirmCloudDelete, setConfirmCloudDelete] = useState(false);
+
   const clearData = () => {
     setData(defaultData);
     localStorage.removeItem(storageKey);
+    localStorage.removeItem(getSyncTimestampKey(storageKey));
   };
 
   const updatePhaseNote = (phase, value) => {
@@ -1304,8 +1993,8 @@ function SettingsPage({
         </label>
         <label className="switch-row">
           <span>
-            <strong>Period and medication reminders</strong>
-            <small>Show reminders while BloomCycle is running.</small>
+            <strong>Smart Health Reminders</strong>
+            <small>Personalized health reminders while BloomCycle is running.</small>
           </span>
           <input
             type="checkbox"
@@ -1320,25 +2009,13 @@ function SettingsPage({
         </label>
         {data.settings.reminderEnabled && (
           <section className="settings-section">
-            <div className="section-header compact">
-              <h2>Reminder schedule</h2>
-              <p>Notifications contain discreet wording and no dosage advice.</p>
+            <div className="section-header compact smart-reminder-heading">
+              <div>
+                <h2>Reminder schedule</h2>
+                <p>Notifications contain discreet wording and no dosage advice.</p>
+              </div>
+              <span className="premium-badge">Premium</span>
             </div>
-            <label>
-              <span>Period reminder</span>
-              <select
-                value={data.settings.periodReminderDays}
-                onChange={(event) => setData((current) => ({
-                  ...current,
-                  settings: { ...current.settings, periodReminderDays: Number(event.target.value) }
-                }))}
-              >
-                <option value="1">1 day before</option>
-                <option value="2">2 days before</option>
-                <option value="3">3 days before</option>
-                <option value="5">5 days before</option>
-              </select>
-            </label>
             <button
               className="outline-btn"
               type="button"
@@ -1351,35 +2028,70 @@ function SettingsPage({
               {notificationPermission === 'denied' && 'Notifications blocked in browser'}
               {notificationPermission === 'unsupported' && 'Notifications unavailable'}
             </button>
+            <SmartHealthReminders data={data} setData={setData} />
             <MedicationReminders data={data} setData={setData} />
           </section>
         )}
         <section className="settings-section">
           <div className="section-header compact status-heading">
             <div>
-              <h2>Secure cloud backup</h2>
-              <p>Keep an optional copy connected to your account.</p>
+              <h2>Secure Cloud Sync</h2>
+              <p>Automatically merge records after login and sync changes across your signed-in devices.</p>
             </div>
-            <span className="status-badge">{cloudStatus}</span>
+            <div className="cloud-status-group">
+              <span className="premium-badge">Premium</span>
+              <span className="status-badge">{cloudStatus}</span>
+            </div>
           </div>
           <label className="switch-row compact-switch">
             <span>
-              <strong>Automatic backup</strong>
-              <small>Sync changes after you update a check-in.</small>
+              <strong>Automatic cross-device sync</strong>
+              <small>
+                {firebaseConfigured
+                  ? 'Your account can access its own Firestore record only.'
+                  : 'Add the Firebase configuration to enable cross-device sync.'}
+              </small>
             </span>
             <input
               type="checkbox"
+              disabled={!firebaseConfigured}
               checked={data.settings.cloudBackupEnabled}
-              onChange={(event) => setData((current) => ({
-                ...current,
-                settings: { ...current.settings, cloudBackupEnabled: event.target.checked }
-              }))}
+              onChange={(event) => updateCloudSync(event.target.checked)}
             />
           </label>
           <div className="settings-actions">
-            <button className="outline-btn" type="button" onClick={backUpNow}><Icon name="cloud" /> Back up now</button>
-            <button className="outline-btn" type="button" onClick={restoreBackup}><Icon name="cycle" /> Restore backup</button>
+            <button
+              className="outline-btn"
+              type="button"
+              disabled={!firebaseConfigured || !cloudReady || !data.settings.cloudBackupEnabled}
+              onClick={backUpNow}
+            >
+              <Icon name="cloud" /> Sync now
+            </button>
+            <button
+              className="outline-btn"
+              type="button"
+              disabled={!firebaseConfigured || !cloudReady}
+              onClick={restoreBackup}
+            >
+              <Icon name="cycle" /> Merge cloud data
+            </button>
           </div>
+          <button
+            className={confirmCloudDelete ? 'cloud-delete-btn confirming' : 'cloud-delete-btn'}
+            type="button"
+            disabled={!firebaseConfigured || !cloudReady}
+            onClick={async () => {
+              if (!confirmCloudDelete) {
+                setConfirmCloudDelete(true);
+                return;
+              }
+              await removeCloudData();
+              setConfirmCloudDelete(false);
+            }}
+          >
+            {confirmCloudDelete ? 'Confirm delete cloud data' : 'Delete my cloud data'}
+          </button>
         </section>
         <label>
           <span>Personal note for {stats.phase}</span>
@@ -1397,9 +2109,146 @@ function SettingsPage({
       </div>
       <div className="privacy-note">
         <Icon name="lock" />
-        <p>Cycle entries stay on this device unless you choose cloud backup. You can disable backup at any time.</p>
+        <p>Health entries stay on this device unless you enable Secure Cloud Sync. You can disable syncing at any time.</p>
       </div>
     </section>
+  );
+}
+
+function SmartHealthReminders({ data, setData }) {
+  const [type, setType] = useState('period');
+  const [label, setLabel] = useState('');
+  const [time, setTime] = useState('09:00');
+  const [daysBefore, setDaysBefore] = useState(2);
+  const [milestoneWeek, setMilestoneWeek] = useState(12);
+
+  const reminders = data.settings.smartReminders || [];
+  const typeDetails = {
+    period: { name: 'Period', icon: 'drop', defaultLabel: 'Period estimate' },
+    ovulation: { name: 'Ovulation', icon: 'spark', defaultLabel: 'Ovulation estimate' },
+    pregnancy: { name: 'Pregnancy milestone', icon: 'pregnant', defaultLabel: `Week ${milestoneWeek} milestone` },
+    hydration: { name: 'Hydration', icon: 'water', defaultLabel: 'Hydration check' },
+    wellness: { name: 'Daily wellness', icon: 'leaf', defaultLabel: 'Daily wellness check-in' }
+  };
+
+  const updateReminders = (smartReminders) => {
+    setData((current) => ({
+      ...current,
+      settings: { ...current.settings, smartReminders }
+    }));
+  };
+
+  const addReminder = (event) => {
+    event.preventDefault();
+    const reminder = {
+      id: globalThis.crypto?.randomUUID?.() || `${Date.now()}`,
+      type,
+      label: label.trim() || typeDetails[type].defaultLabel,
+      time,
+      enabled: true,
+      ...(type === 'period' || type === 'ovulation' ? { daysBefore: Number(daysBefore) } : {}),
+      ...(type === 'pregnancy' ? { milestoneWeek: Number(milestoneWeek) } : {})
+    };
+    updateReminders([...reminders, reminder]);
+    setLabel('');
+  };
+
+  const toggleReminder = (id) => {
+    updateReminders(reminders.map((reminder) => (
+      reminder.id === id ? { ...reminder, enabled: !reminder.enabled } : reminder
+    )));
+  };
+
+  const removeReminder = (id) => {
+    updateReminders(reminders.filter((reminder) => reminder.id !== id));
+  };
+
+  const describeSchedule = (reminder) => {
+    if (reminder.type === 'period' || reminder.type === 'ovulation') {
+      const days = Number(reminder.daysBefore) || 0;
+      return `${days} day${days === 1 ? '' : 's'} before · ${reminder.time}`;
+    }
+    if (reminder.type === 'pregnancy') return `Week ${reminder.milestoneWeek} · ${reminder.time}`;
+    return `Every day · ${reminder.time}`;
+  };
+
+  return (
+    <div className="smart-reminder-manager">
+      <form className="smart-reminder-form" onSubmit={addReminder}>
+        <label>
+          <span>Reminder type</span>
+          <select value={type} onChange={(event) => setType(event.target.value)}>
+            {Object.entries(typeDetails).map(([value, details]) => (
+              <option key={value} value={value}>{details.name}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Reminder name</span>
+          <input
+            value={label}
+            maxLength="60"
+            placeholder={typeDetails[type].defaultLabel}
+            onChange={(event) => setLabel(event.target.value)}
+          />
+        </label>
+        <label>
+          <span>Time</span>
+          <input type="time" required value={time} onChange={(event) => setTime(event.target.value)} />
+        </label>
+        {(type === 'period' || type === 'ovulation') && (
+          <label>
+            <span>Notify before estimate</span>
+            <select value={daysBefore} onChange={(event) => setDaysBefore(Number(event.target.value))}>
+              {[0, 1, 2, 3, 5, 7].map((days) => (
+                <option key={days} value={days}>{days === 0 ? 'On estimated day' : `${days} days before`}</option>
+              ))}
+            </select>
+          </label>
+        )}
+        {type === 'pregnancy' && (
+          <label>
+            <span>Pregnancy week</span>
+            <input
+              type="number"
+              min="1"
+              max="40"
+              required
+              value={milestoneWeek}
+              onChange={(event) => setMilestoneWeek(event.target.value)}
+            />
+          </label>
+        )}
+        <button className="primary-btn" type="submit"><Icon name="plus" /> Add reminder</button>
+      </form>
+
+      <div className="smart-reminder-list">
+        {reminders.length === 0 && <p className="muted">No personalized reminders scheduled yet.</p>}
+        {reminders.map((reminder) => {
+          const details = typeDetails[reminder.type] || typeDetails.wellness;
+          return (
+            <div className={reminder.enabled ? 'smart-reminder-item active' : 'smart-reminder-item'} key={reminder.id}>
+              <button type="button" className="smart-reminder-toggle" onClick={() => toggleReminder(reminder.id)}>
+                <Icon name={details.icon} />
+                <span>
+                  <strong>{reminder.label}</strong>
+                  <small>{details.name} · {describeSchedule(reminder)}</small>
+                </span>
+                <i aria-hidden="true" />
+              </button>
+              <button
+                className="remove-btn"
+                type="button"
+                aria-label={`Remove ${reminder.label}`}
+                onClick={() => removeReminder(reminder.id)}
+              >
+                <Icon name="close" />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

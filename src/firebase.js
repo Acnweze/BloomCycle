@@ -204,10 +204,26 @@ export async function saveCloudBackup(userId, data) {
 }
 
 export async function loadCloudBackup(userId) {
+  const record = await loadCloudBackupRecord(userId);
+  return record?.data || null;
+}
+
+export async function loadCloudBackupRecord(userId) {
   const { doc, getDoc, getFirestore } = await import('firebase/firestore');
   const database = getFirestore(requireApp());
   const snapshot = await getDoc(doc(database, 'users', userId, 'backups', 'cycleData'));
-  return snapshot.exists() ? snapshot.data().data : null;
+  if (!snapshot.exists()) return null;
+  const record = snapshot.data();
+  return {
+    data: record.data,
+    updatedAt: record.updatedAt?.toMillis?.() || 0
+  };
+}
+
+export async function deleteCloudBackup(userId) {
+  const { deleteDoc, doc, getFirestore } = await import('firebase/firestore');
+  const database = getFirestore(requireApp());
+  await deleteDoc(doc(database, 'users', userId, 'backups', 'cycleData'));
 }
 
 export function getAuthMessage(error) {

@@ -4,6 +4,8 @@ BloomCycle is a mobile-first React app for privately tracking periods, estimated
 
 ## Features
 
+- Three-step first-run onboarding for feature orientation, cycle profile setup, and privacy preferences
+- In-app Privacy Policy and Terms of Use available before and after sign-in
 - Dashboard with cycle day, next expected period, estimated ovulation, and fertile window
 - Calendar visualization for period and fertility estimates
 - Symptom, mood, flow, and notes tracking
@@ -12,9 +14,9 @@ BloomCycle is a mobile-first React app for privately tracking periods, estimated
 - Today's Body Insight and phase-based self-care suggestions
 - Cycle Confidence Score and Cycle Signature
 - Cycle analytics for average length, regularity, mood, symptoms, sleep, and water
-- Browser reminders for estimated periods and user-entered medication schedules
+- Personalized browser reminders for period and ovulation estimates, pregnancy milestones, medications, hydration, and daily wellness check-ins
 - PDF cycle and care reports
-- Optional per-account cloud backup and restore
+- Optional per-account Secure Cloud Sync with automatic login hydration and cross-device record merging
 - Copyable partner or gynecologist summary using patient details
 - Private Mode for less sensitive on-screen wording
 - Email, username, and password registration
@@ -68,7 +70,7 @@ npm run build
 
 ## Privacy and Security
 
-Firebase Authentication manages account passwords, login sessions, and reset emails. Cycle records remain local unless the user enables or manually starts cloud backup. Cloud documents are stored beneath the authenticated user's Firebase UID and must be protected by the included Firestore rules.
+Firebase Authentication manages account passwords, login sessions, and reset emails. Health records remain local unless the user enables Secure Cloud Sync. When enabled, BloomCycle merges cloud records after login and syncs later changes. Cloud documents are stored beneath the authenticated user's Firebase UID and protected by the included Firestore rules. Settings include separate controls to clear local records and delete the synced cloud record.
 
 Browser reminders work while BloomCycle is open. Reliable closed-app reminders require a deployed push-notification service and explicit user permission.
 
