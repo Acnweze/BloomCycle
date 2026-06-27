@@ -80,7 +80,7 @@ const navItems = [
   { id: 'dashboard', label: 'Dashboard', icon: 'home' },
   { id: 'calendar', label: 'Calendar', icon: 'calendar' },
   { id: 'log', label: 'Log', icon: 'edit' },
-  { id: 'pregnancy', label: 'Pregnancy', icon: 'baby' },
+  { id: 'pregnancy', label: 'Pregnancy', icon: 'pregnant' },
   { id: 'insights', label: 'Insights', icon: 'spark' },
   { id: 'settings', label: 'Settings', icon: 'settings' }
 ];
@@ -1687,6 +1687,10 @@ function SectionHeader({ title, subtitle }) {
 }
 
 function Icon({ name }) {
+  if (name === 'pregnant') {
+    return <span className="pregnant-woman-icon" role="img" aria-label="Pregnant woman">🤰</span>;
+  }
+
   const icons = {
     home: 'M4 11.5 12 5l8 6.5V20a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1v-8.5Z',
     calendar: 'M7 3v3M17 3v3M4 9h16M6 5h12a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z',
