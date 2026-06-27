@@ -1274,6 +1274,8 @@ function AuthGate({ onAuthenticated }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState('error');
   const [busy, setBusy] = useState(false);
@@ -1338,6 +1340,8 @@ function AuthGate({ onAuthenticated }) {
     setMessage('');
     setPassword('');
     setConfirmPassword('');
+    setShowPassword(false);
+    setShowConfirmPassword(false);
   };
 
   const primaryLabel = busy
@@ -1399,25 +1403,45 @@ function AuthGate({ onAuthenticated }) {
           {mode !== 'reset' && (
             <label>
               <span>Password</span>
-              <input
-                type="password"
-                autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="At least 8 characters"
-              />
+              <div className="password-field">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  placeholder="At least 8 characters"
+                />
+                <button
+                  type="button"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  aria-pressed={showPassword}
+                  onClick={() => setShowPassword((current) => !current)}
+                >
+                  {showPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
             </label>
           )}
           {mode === 'register' && (
             <label>
               <span>Confirm password</span>
-              <input
-                type="password"
-                autoComplete="new-password"
-                value={confirmPassword}
-                onChange={(event) => setConfirmPassword(event.target.value)}
-                placeholder="Repeat password"
-              />
+              <div className="password-field">
+                <input
+                  type={showConfirmPassword ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  placeholder="Repeat password"
+                />
+                <button
+                  type="button"
+                  aria-label={showConfirmPassword ? 'Hide confirmation password' : 'Show confirmation password'}
+                  aria-pressed={showConfirmPassword}
+                  onClick={() => setShowConfirmPassword((current) => !current)}
+                >
+                  {showConfirmPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
             </label>
           )}
           {message && <p className={`auth-message ${messageType}`}>{message}</p>}

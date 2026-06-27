@@ -553,6 +553,35 @@ svg {
   gap: 0.85rem;
 }
 
+.password-field {
+  position: relative;
+}
+
+.password-field input {
+  padding-right: 4.4rem;
+}
+
+.password-field button {
+  position: absolute;
+  top: 50%;
+  right: 0.45rem;
+  min-width: 3.4rem;
+  min-height: 2.1rem;
+  padding: 0.35rem 0.55rem;
+  border: 0;
+  border-radius: 11px;
+  color: var(--grape);
+  background: rgba(217, 205, 249, 0.42);
+  font-size: 0.72rem;
+  font-weight: 900;
+  transform: translateY(-50%);
+}
+
+.password-field button:hover,
+.password-field button:focus-visible {
+  background: var(--lavender);
+}
+
 .auth-form .primary-btn:disabled {
   cursor: wait;
   opacity: 0.72;
