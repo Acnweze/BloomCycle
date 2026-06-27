@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
+  firebaseConfigured,
   getAuthMessage,
   loadCloudBackup,
   observeAuth,
@@ -582,11 +583,18 @@ function AuthGate({ onAuthenticated }) {
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState('error');
   const [busy, setBusy] = useState(false);
+  const accountReady = firebaseConfigured;
 
   const submitAuth = async (event) => {
     event.preventDefault();
     setMessage('');
     setMessageType('error');
+
+    if (!accountReady) {
+      setMessage('Account sign-in is not configured yet. Add the Firebase values from .env.example to enable login, registration, and password reset.');
+      return;
+    }
+
     const cleanEmail = email.trim().toLowerCase();
     const cleanUsername = username.trim();
 
@@ -659,6 +667,12 @@ function AuthGate({ onAuthenticated }) {
           {mode === 'reset' && 'Enter your registered email to receive a secure password reset link.'}
         </p>
 
+        {!accountReady && (
+          <p className="auth-note auth-setup-note">
+            Account sign-in is not active in this build yet. Add the Firebase environment variables listed in <code>.env.example</code> and restart the app.
+          </p>
+        )}
+
         <form className="auth-form" onSubmit={submitAuth}>
           <label>
             <span>Email</span>
@@ -707,9 +721,10 @@ function AuthGate({ onAuthenticated }) {
             </label>
           )}
           {message && <p className={`auth-message ${messageType}`}>{message}</p>}
-          <button className="primary-btn" type="submit" disabled={busy}>
+          <button className="primary-btn" type="submit" disabled={busy || !accountReady}>
             <Icon name={mode === 'reset' ? 'mail' : 'lock'} />
             {busy && 'Please wait...'}
+            {!busy && !accountReady && 'Firebase setup required'}
             {!busy && mode === 'register' && 'Create secure account'}
             {!busy && mode === 'login' && 'Sign in'}
             {!busy && mode === 'reset' && 'Send reset email'}
