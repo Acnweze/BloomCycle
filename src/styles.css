@@ -260,6 +260,12 @@ h2 {
 .calendar-card,
 .form-panel,
 .journal-panel,
+.pregnancy-setup-panel,
+.pregnancy-progress-card,
+.pregnancy-info-card,
+.pregnancy-notes-panel,
+.pregnancy-empty-state,
+.pregnancy-disclaimer,
 .clinician-card,
 .insight-card,
 .signature-card,
@@ -394,6 +400,170 @@ h2 {
   padding: 1rem;
 }
 
+.pregnancy-setup-panel,
+.pregnancy-notes-panel {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.pregnancy-methods {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.pregnancy-methods legend {
+  grid-column: 1 / -1;
+  margin-bottom: 0.1rem;
+  color: var(--grape);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.pregnancy-methods button {
+  min-height: 3rem;
+  padding: 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  color: var(--grape);
+  background: rgba(255, 255, 255, 0.68);
+  font-size: 0.8rem;
+  font-weight: 850;
+}
+
+.pregnancy-methods button.active {
+  border-color: var(--lilac);
+  color: white;
+  background: var(--grape);
+}
+
+.pregnancy-date-note {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.pregnancy-error {
+  margin: 0;
+  padding: 0.75rem 0.85rem;
+  border-radius: 14px;
+  color: #8d2444;
+  background: rgba(248, 220, 227, 0.62);
+  font-weight: 750;
+}
+
+.pregnancy-progress-card {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.pregnancy-progress-card > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.pregnancy-progress-card > div:first-child span {
+  color: var(--grape);
+  font-weight: 850;
+}
+
+.pregnancy-progress-card strong {
+  color: var(--rose);
+  font-size: 1.6rem;
+}
+
+.pregnancy-progress-card small {
+  color: var(--muted);
+}
+
+.pregnancy-weekly-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.8rem;
+}
+
+.pregnancy-info-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 0.85rem;
+  padding: 1rem;
+}
+
+.pregnancy-info-card > svg,
+.pregnancy-empty-state > svg {
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0.55rem;
+  border-radius: 16px;
+  color: var(--plum);
+  background: var(--blush);
+}
+
+.pregnancy-info-card.self-care > svg {
+  color: #31513b;
+  background: rgba(124, 154, 130, 0.22);
+}
+
+.pregnancy-info-card p {
+  margin-bottom: 0.25rem;
+  color: var(--grape);
+  font-size: 0.75rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.pregnancy-info-card h2,
+.pregnancy-empty-state h2 {
+  margin-bottom: 0.3rem;
+  color: var(--plum);
+  font-size: 1.2rem;
+}
+
+.pregnancy-info-card span,
+.pregnancy-empty-state p,
+.pregnancy-disclaimer p {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.pregnancy-empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 0.4rem;
+  padding: 2rem 1rem;
+  text-align: center;
+}
+
+.pregnancy-empty-state p {
+  max-width: 34rem;
+  margin: 0;
+}
+
+.pregnancy-disclaimer {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: rgba(217, 205, 249, 0.24);
+}
+
+.pregnancy-disclaimer svg {
+  margin-top: 0.15rem;
+  color: var(--grape);
+}
+
+.pregnancy-disclaimer p {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
 .care-checkin-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -507,6 +677,15 @@ h2 {
   display: grid;
   gap: 1rem;
   padding: 1rem;
+}
+
+.patient-details-form {
+  display: grid;
+  gap: 1rem;
+}
+
+.patient-submit-btn {
+  width: 100%;
 }
 
 .clinician-actions {
@@ -1290,7 +1469,7 @@ textarea:focus {
   left: 0.75rem;
   z-index: 10;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 0.25rem;
   width: min(calc(100% - 1.5rem), 46rem);
   margin: 0 auto;
@@ -1364,6 +1543,10 @@ textarea:focus {
   }
 
   .pattern-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pregnancy-weekly-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

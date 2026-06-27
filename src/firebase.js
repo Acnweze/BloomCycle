@@ -23,11 +23,62 @@ export const firebaseConfigured = Object.values(firebaseConfig).every(Boolean);
 let auth = null;
 let firebaseApp = null;
 let authReady = Promise.resolve();
+const DEMO_ACCOUNTS_KEY = 'bloomcycle-demo-accounts-v1';
+const DEMO_SESSION_KEY = 'bloomcycle-demo-session-v1';
+const demoListeners = new Set();
 
 if (firebaseConfigured) {
   firebaseApp = initializeApp(firebaseConfig);
   auth = getAuth(firebaseApp);
   authReady = setPersistence(auth, browserLocalPersistence);
+}
+
+function readDemoAccounts() {
+  try {
+    return JSON.parse(localStorage.getItem(DEMO_ACCOUNTS_KEY) || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function writeDemoAccounts(accounts) {
+  localStorage.setItem(DEMO_ACCOUNTS_KEY, JSON.stringify(accounts));
+}
+
+function readDemoSession() {
+  return localStorage.getItem(DEMO_SESSION_KEY) || '';
+}
+
+function writeDemoSession(uid) {
+  if (uid) {
+    localStorage.setItem(DEMO_SESSION_KEY, uid);
+  } else {
+    localStorage.removeItem(DEMO_SESSION_KEY);
+  }
+}
+
+function getDemoUserByUid(uid) {
+  return readDemoAccounts().find((account) => account.uid === uid) || null;
+}
+
+function getDemoUserByEmail(email) {
+  const cleanEmail = email.trim().toLowerCase();
+  return readDemoAccounts().find((account) => account.email === cleanEmail) || null;
+}
+
+function notifyDemoAuth(user) {
+  demoListeners.forEach((listener) => listener(user));
+}
+
+function getDemoCurrentUser() {
+  const user = getDemoUserByUid(readDemoSession());
+  return user
+    ? {
+        uid: user.uid,
+        email: user.email,
+        displayName: user.displayName
+      }
+    : null;
 }
 
 function requireApp() {
@@ -50,6 +101,13 @@ function requireAuth() {
 
 export function observeAuth(callback) {
   if (!auth) {
+    callback(getDemoCurrentUser());
+    const listener = (user) => callback(user);
+    demoListeners.add(listener);
+    return () => demoListeners.delete(listener);
+  }
+
+  if (!auth) {
     callback(null);
     return () => {};
   }
@@ -62,6 +120,26 @@ export function observeAuth(callback) {
 }
 
 export async function registerAccount(email, username, password) {
+  if (!auth) {
+    const cleanEmail = email.trim().toLowerCase();
+    if (getDemoUserByEmail(cleanEmail)) {
+      const error = new Error('An account already uses this email address.');
+      error.code = 'auth/email-already-in-use';
+      throw error;
+    }
+    const user = {
+      uid: crypto.randomUUID(),
+      email: cleanEmail,
+      displayName: username.trim()
+    };
+    const accounts = readDemoAccounts();
+    accounts.push({ ...user, password });
+    writeDemoAccounts(accounts);
+    writeDemoSession(user.uid);
+    notifyDemoAuth(user);
+    return user;
+  }
+
   await authReady;
   const credential = await createUserWithEmailAndPassword(requireAuth(), email, password);
   await updateProfile(credential.user, { displayName: username });
@@ -69,17 +147,49 @@ export async function registerAccount(email, username, password) {
 }
 
 export async function signInAccount(email, password) {
+  if (!auth) {
+    const account = getDemoUserByEmail(email);
+    if (!account || account.password !== password) {
+      const error = new Error('Email or password is incorrect.');
+      error.code = 'auth/invalid-credential';
+      throw error;
+    }
+    const user = {
+      uid: account.uid,
+      email: account.email,
+      displayName: account.displayName
+    };
+    writeDemoSession(user.uid);
+    notifyDemoAuth(user);
+    return user;
+  }
+
   await authReady;
   const credential = await signInWithEmailAndPassword(requireAuth(), email, password);
   return credential.user;
 }
 
 export async function sendResetEmail(email) {
+  if (!auth) {
+    if (!getDemoUserByEmail(email)) {
+      const error = new Error('Email or password is incorrect.');
+      error.code = 'auth/invalid-credential';
+      throw error;
+    }
+    return;
+  }
+
   await authReady;
   await sendPasswordResetEmail(requireAuth(), email);
 }
 
 export async function signOutAccount() {
+  if (!auth) {
+    writeDemoSession('');
+    notifyDemoAuth(null);
+    return;
+  }
+
   await authReady;
   await signOut(requireAuth());
 }

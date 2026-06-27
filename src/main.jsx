@@ -49,6 +49,12 @@ const defaultData = {
   },
   journal: [],
   dailyLogs: [],
+  pregnancy: {
+    inputMethod: 'lmp',
+    lmp: '',
+    dueDate: '',
+    weeklyNotes: []
+  },
   settings: {
     reminderEnabled: true,
     periodReminderDays: 2,
@@ -76,6 +82,7 @@ const navItems = [
   { id: 'dashboard', label: 'Dashboard', icon: 'home' },
   { id: 'calendar', label: 'Calendar', icon: 'calendar' },
   { id: 'log', label: 'Log', icon: 'edit' },
+  { id: 'pregnancy', label: 'Pregnancy', icon: 'baby' },
   { id: 'insights', label: 'Insights', icon: 'spark' },
   { id: 'settings', label: 'Settings', icon: 'settings' }
 ];
@@ -261,6 +268,11 @@ function normalizeData(parsed) {
     todayLog,
     journal: parsed?.journal || [],
     dailyLogs: parsed?.dailyLogs || [],
+    pregnancy: {
+      ...defaultData.pregnancy,
+      ...parsed?.pregnancy,
+      weeklyNotes: parsed?.pregnancy?.weeklyNotes || []
+    },
     settings: {
       ...defaultData.settings,
       ...parsed?.settings,
@@ -391,6 +403,13 @@ function App({ currentUser, onSignOut }) {
     }));
   };
 
+  const updatePregnancy = (updates) => {
+    setData((current) => ({
+      ...current,
+      pregnancy: { ...current.pregnancy, ...updates }
+    }));
+  };
+
   const toggleSymptom = (symptom) => {
     setData((current) => {
       const exists = current.todayLog.symptoms.includes(symptom);
@@ -511,6 +530,13 @@ function App({ currentUser, onSignOut }) {
           />
         )}
         {activePage === 'calendar' && <CalendarPage stats={stats} data={data} display={display} />}
+        {activePage === 'pregnancy' && (
+          <PregnancyPage
+            pregnancy={data.pregnancy}
+            updatePregnancy={updatePregnancy}
+            display={display}
+          />
+        )}
         {activePage === 'log' && (
           <LogPage
             data={data}
@@ -583,17 +609,11 @@ function AuthGate({ onAuthenticated }) {
   const [message, setMessage] = useState('');
   const [messageType, setMessageType] = useState('error');
   const [busy, setBusy] = useState(false);
-  const accountReady = firebaseConfigured;
 
   const submitAuth = async (event) => {
     event.preventDefault();
     setMessage('');
     setMessageType('error');
-
-    if (!accountReady) {
-      setMessage('Account sign-in is not configured yet. Add the Firebase values from .env.example to enable login, registration, and password reset.');
-      return;
-    }
 
     const cleanEmail = email.trim().toLowerCase();
     const cleanUsername = username.trim();
@@ -651,6 +671,14 @@ function AuthGate({ onAuthenticated }) {
     setConfirmPassword('');
   };
 
+  const primaryLabel = busy
+    ? 'Please wait...'
+    : mode === 'register'
+      ? 'Create secure account'
+      : mode === 'reset'
+        ? 'Send reset email'
+        : 'Sign in';
+
   return (
     <div className="auth-shell">
       <section className="auth-card">
@@ -667,9 +695,9 @@ function AuthGate({ onAuthenticated }) {
           {mode === 'reset' && 'Enter your registered email to receive a secure password reset link.'}
         </p>
 
-        {!accountReady && (
+        {!firebaseConfigured && (
           <p className="auth-note auth-setup-note">
-            Account sign-in is not active in this build yet. Add the Firebase environment variables listed in <code>.env.example</code> and restart the app.
+            Demo mode is active. Accounts are stored in this browser only, so you can register, sign in, and reset passwords without Firebase.
           </p>
         )}
 
@@ -721,13 +749,9 @@ function AuthGate({ onAuthenticated }) {
             </label>
           )}
           {message && <p className={`auth-message ${messageType}`}>{message}</p>}
-          <button className="primary-btn" type="submit" disabled={busy || !accountReady}>
+          <button className="primary-btn" type="submit" disabled={busy}>
             <Icon name={mode === 'reset' ? 'mail' : 'lock'} />
-            {busy && 'Please wait...'}
-            {!busy && !accountReady && 'Firebase setup required'}
-            {!busy && mode === 'register' && 'Create secure account'}
-            {!busy && mode === 'login' && 'Sign in'}
-            {!busy && mode === 'reset' && 'Send reset email'}
+            {primaryLabel}
           </button>
         </form>
 
@@ -889,6 +913,176 @@ function CalendarPage({ stats, data, display }) {
         <span><i className="ovulation-dot" /> {display('Ovulation')}</span>
         <span><i className="symptom-dot" /> {display('Symptoms logged')}</span>
         <span><i className="today-dot" /> Today</span>
+      </div>
+    </section>
+  );
+}
+
+function PregnancyPage({ pregnancy, updatePregnancy, display }) {
+  const pregnancyStats = useMemo(() => getPregnancyStats(pregnancy), [pregnancy]);
+  const noteWeek = pregnancyStats.ready ? pregnancyStats.developmentWeek : 1;
+  const savedNote = pregnancy.weeklyNotes.find((entry) => entry.week === noteWeek);
+  const [weeklyNote, setWeeklyNote] = useState(savedNote?.text || '');
+  const [noteSaved, setNoteSaved] = useState(false);
+
+  useEffect(() => {
+    const matchingNote = pregnancy.weeklyNotes.find((entry) => entry.week === noteWeek);
+    setWeeklyNote(matchingNote?.text || '');
+  }, [noteWeek, pregnancy.weeklyNotes]);
+
+  const chooseInputMethod = (inputMethod) => {
+    updatePregnancy({ inputMethod });
+  };
+
+  const saveWeeklyNote = () => {
+    if (!pregnancyStats.ready) return;
+    const text = weeklyNote.trim();
+    const otherNotes = pregnancy.weeklyNotes.filter((entry) => entry.week !== noteWeek);
+    const weeklyNotes = text
+      ? [{ week: noteWeek, text, savedAt: new Date().toISOString() }, ...otherNotes]
+      : otherNotes;
+    updatePregnancy({ weeklyNotes });
+    setNoteSaved(true);
+    setTimeout(() => setNoteSaved(false), 1800);
+  };
+
+  const weeklyContent = pregnancyStats.ready
+    ? getWeeklyPregnancyContent(pregnancyStats.developmentWeek)
+    : null;
+
+  return (
+    <section className="page pregnancy-page">
+      <SectionHeader
+        title={display('Pregnancy Tracker')}
+        subtitle={display('A private weekly view based on your LMP or estimated due date')}
+      />
+
+      <div className="pregnancy-setup-panel">
+        <fieldset className="pregnancy-methods">
+          <legend>Calculate pregnancy from</legend>
+          <button
+            type="button"
+            className={pregnancy.inputMethod === 'lmp' ? 'active' : ''}
+            aria-pressed={pregnancy.inputMethod === 'lmp'}
+            onClick={() => chooseInputMethod('lmp')}
+          >
+            Last Menstrual Period (LMP)
+          </button>
+          <button
+            type="button"
+            className={pregnancy.inputMethod === 'dueDate' ? 'active' : ''}
+            aria-pressed={pregnancy.inputMethod === 'dueDate'}
+            onClick={() => chooseInputMethod('dueDate')}
+          >
+            Due Date
+          </button>
+        </fieldset>
+
+        {pregnancy.inputMethod === 'lmp' ? (
+          <label>
+            <span>First day of your last menstrual period</span>
+            <input
+              type="date"
+              max={isoDate(new Date())}
+              value={pregnancy.lmp}
+              onChange={(event) => updatePregnancy({ lmp: event.target.value })}
+            />
+          </label>
+        ) : (
+          <label>
+            <span>Estimated due date</span>
+            <input
+              type="date"
+              value={pregnancy.dueDate}
+              onChange={(event) => updatePregnancy({ dueDate: event.target.value })}
+            />
+          </label>
+        )}
+        <small className="pregnancy-date-note">
+          LMP dating estimates 40 weeks from the first day of the last period. A care professional may revise the date.
+        </small>
+        {pregnancyStats.error && <p className="pregnancy-error" role="alert">{pregnancyStats.error}</p>}
+      </div>
+
+      {pregnancyStats.ready ? (
+        <>
+          <div className="metric-grid pregnancy-metrics">
+            <Metric title="Current pregnancy week" value={pregnancyStats.weekLabel} icon="baby" />
+            <Metric title="Trimester" value={pregnancyStats.trimester} icon="spark" />
+            <Metric title="Estimated due date" value={formatDate(pregnancyStats.dueDate)} icon="calendar" />
+            <Metric title="Days remaining" value={`${pregnancyStats.daysRemaining} days`} icon="cycle" />
+          </div>
+
+          <article className="pregnancy-progress-card">
+            <div>
+              <span>Pregnancy progress</span>
+              <strong>{Math.round(pregnancyStats.progress)}%</strong>
+            </div>
+            <div
+              className="progress-track"
+              role="progressbar"
+              aria-label="Pregnancy progress"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow={Math.round(pregnancyStats.progress)}
+            >
+              <span style={{ width: `${pregnancyStats.progress}%` }} />
+            </div>
+            <small>Based on an estimated 40-week pregnancy.</small>
+          </article>
+
+          <div className="pregnancy-weekly-grid">
+            <article className="pregnancy-info-card">
+              <Icon name="baby" />
+              <div>
+                <p>Week {pregnancyStats.developmentWeek} development</p>
+                <h2>{weeklyContent.title}</h2>
+                <span>{weeklyContent.summary}</span>
+              </div>
+            </article>
+            <article className="pregnancy-info-card self-care">
+              <Icon name="leaf" />
+              <div>
+                <p>Self-care idea</p>
+                <h2>A gentle check-in</h2>
+                <span>{weeklyContent.tip}</span>
+              </div>
+            </article>
+          </div>
+
+          <div className="pregnancy-notes-panel">
+            <div className="section-header compact">
+              <h2>Week {noteWeek} notes</h2>
+              <p>Save questions, milestones, appointment details, or anything you want to remember.</p>
+            </div>
+            <label>
+              <span>Weekly note</span>
+              <textarea
+                rows="5"
+                value={weeklyNote}
+                placeholder={`What would you like to remember about week ${noteWeek}?`}
+                onChange={(event) => setWeeklyNote(event.target.value)}
+              />
+            </label>
+            <button className="primary-btn" type="button" onClick={saveWeeklyNote}>
+              <Icon name="save" /> {noteSaved ? 'Weekly note saved' : 'Save weekly note'}
+            </button>
+          </div>
+        </>
+      ) : !pregnancyStats.error && (
+        <div className="pregnancy-empty-state">
+          <Icon name="baby" />
+          <h2>Add a date to begin</h2>
+          <p>Enter your LMP or due date to see an estimated week, trimester, progress, and weekly information.</p>
+        </div>
+      )}
+
+      <div className="pregnancy-disclaimer">
+        <Icon name="lock" />
+        <p>
+          The Pregnancy Tracker is for educational purposes only and is not medical advice. Dates and development
+          summaries are estimates. Contact a qualified healthcare professional for prenatal care and personal guidance.
+        </p>
       </div>
     </section>
   );
@@ -1313,10 +1507,12 @@ function MedicationReminders({ data, setData }) {
 
 function GynecologistContact({ data, setData, stats, currentUser }) {
   const [copied, setCopied] = useState(false);
+  const [detailsSaved, setDetailsSaved] = useState(false);
   const clinician = data.settings.clinician;
   const emailBody = encodeURIComponent(buildClinicianMessage(data, stats, currentUser));
 
   const updateClinician = (field, value) => {
+    setDetailsSaved(false);
     setData((current) => ({
       ...current,
       settings: {
@@ -1324,6 +1520,12 @@ function GynecologistContact({ data, setData, stats, currentUser }) {
         clinician: { ...current.settings.clinician, [field]: value }
       }
     }));
+  };
+
+  const submitPatientDetails = (event) => {
+    event.preventDefault();
+    setDetailsSaved(true);
+    setTimeout(() => setDetailsSaved(false), 1800);
   };
 
   const copyMessage = async () => {
@@ -1338,44 +1540,52 @@ function GynecologistContact({ data, setData, stats, currentUser }) {
         <h2>Contact Gynecologist</h2>
         <p>Enter patient details and prepare a simple cycle summary before an appointment.</p>
       </div>
-      <div className="signal-grid">
+      <form className="patient-details-form" onSubmit={submitPatientDetails}>
+        <div className="signal-grid">
+          <label>
+            <span>Patient name</span>
+            <input
+              type="text"
+              required
+              value={clinician.patientName || data.settings.patientName || clinician.name}
+              placeholder={currentUser || 'Patient name'}
+              onChange={(event) => updateClinician('patientName', event.target.value)}
+            />
+          </label>
+          <label>
+            <span>Patient phone</span>
+            <input
+              type="tel"
+              required
+              value={clinician.phone}
+              placeholder="Your phone number"
+              onChange={(event) => updateClinician('phone', event.target.value)}
+            />
+          </label>
+          <label>
+            <span>Patient email</span>
+            <input
+              type="email"
+              required
+              value={clinician.email}
+              placeholder="your.email@example.com"
+              onChange={(event) => updateClinician('email', event.target.value)}
+            />
+          </label>
+        </div>
         <label>
-          <span>Patient name</span>
-          <input
-            type="text"
-            value={clinician.patientName || data.settings.patientName || clinician.name}
-            placeholder={currentUser || 'Patient name'}
-            onChange={(event) => updateClinician('patientName', event.target.value)}
+          <span>Reason for visit</span>
+          <textarea
+            rows="3"
+            value={clinician.visitReason}
+            placeholder="Example: I want to discuss cycle changes, pain, heavy bleeding, or irregular timing."
+            onChange={(event) => updateClinician('visitReason', event.target.value)}
           />
         </label>
-        <label>
-          <span>Patient phone</span>
-          <input
-            type="tel"
-            value={clinician.phone}
-            placeholder="Your phone number"
-            onChange={(event) => updateClinician('phone', event.target.value)}
-          />
-        </label>
-        <label>
-          <span>Patient email</span>
-          <input
-            type="email"
-            value={clinician.email}
-            placeholder="your.email@example.com"
-            onChange={(event) => updateClinician('email', event.target.value)}
-          />
-        </label>
-      </div>
-      <label>
-        <span>Reason for visit</span>
-        <textarea
-          rows="3"
-          value={clinician.visitReason}
-          placeholder="Example: I want to discuss cycle changes, pain, heavy bleeding, or irregular timing."
-          onChange={(event) => updateClinician('visitReason', event.target.value)}
-        />
-      </label>
+        <button className="primary-btn patient-submit-btn" type="submit">
+          <Icon name="save" /> {detailsSaved ? 'Patient details saved' : 'Submit patient details'}
+        </button>
+      </form>
       <div className="clinician-actions">
         <a href={`mailto:?subject=BloomCycle%20Patient%20Summary&body=${emailBody}`}>
           <Icon name="mail" /> Open email draft
@@ -1526,6 +1736,7 @@ function Icon({ name }) {
     cloud: 'M7 18h10a4 4 0 0 0 .5-8A6 6 0 0 0 6 11a3.5 3.5 0 0 0 1 7Z',
     download: 'M12 4v11M8 11l4 4 4-4M5 20h14',
     chart: 'M5 20V10M12 20V4M19 20v-7M3 20h18',
+    baby: 'M9 5a3 3 0 1 1 4.8 2.4A6.5 6.5 0 1 1 9 5ZM9 13h.01M15 13h.01M9.5 17c1.5 1 3.5 1 5 0',
     plus: 'M12 5v14M5 12h14',
     minus: 'M5 12h14',
     close: 'm7 7 10 10M17 7 7 17'
@@ -1536,6 +1747,124 @@ function Icon({ name }) {
       <path d={icons[name]} />
     </svg>
   );
+}
+
+function getPregnancyStats(pregnancy) {
+  const inputValue = pregnancy.inputMethod === 'dueDate' ? pregnancy.dueDate : pregnancy.lmp;
+  if (!inputValue) return { ready: false, error: '' };
+
+  const enteredDate = parseLocalDate(inputValue);
+  if (!enteredDate || Number.isNaN(enteredDate.getTime())) {
+    return { ready: false, error: 'Enter a valid date.' };
+  }
+
+  const today = stripTime(new Date());
+  const lmp = pregnancy.inputMethod === 'dueDate' ? addDays(enteredDate, -280) : enteredDate;
+  const dueDate = pregnancy.inputMethod === 'dueDate' ? enteredDate : addDays(enteredDate, 280);
+  const elapsedDays = pregnancyDaysBetween(lmp, today);
+
+  if (elapsedDays < 0) {
+    return {
+      ready: false,
+      error: pregnancy.inputMethod === 'dueDate'
+        ? 'This due date is more than 40 weeks away. Check the date and try again.'
+        : 'The LMP date cannot be in the future.'
+    };
+  }
+
+  const completedWeeks = Math.floor(elapsedDays / 7);
+  const extraDays = elapsedDays % 7;
+  const developmentWeek = Math.min(40, Math.max(1, completedWeeks));
+  const trimester = completedWeeks < 13
+    ? 'First trimester'
+    : completedWeeks < 28
+      ? 'Second trimester'
+      : 'Third trimester';
+
+  return {
+    ready: true,
+    lmp,
+    dueDate,
+    completedWeeks,
+    developmentWeek,
+    trimester,
+    weekLabel: `${completedWeeks} weeks, ${extraDays} ${extraDays === 1 ? 'day' : 'days'}`,
+    daysRemaining: Math.max(0, pregnancyDaysBetween(today, dueDate)),
+    progress: Math.min(100, Math.max(0, (elapsedDays / 280) * 100))
+  };
+}
+
+function pregnancyDaysBetween(start, end) {
+  const startUtc = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate());
+  const endUtc = Date.UTC(end.getFullYear(), end.getMonth(), end.getDate());
+  return Math.floor((endUtc - startUtc) / (24 * 60 * 60 * 1000));
+}
+
+function getWeeklyPregnancyContent(week) {
+  const stages = [
+    {
+      through: 4,
+      title: 'Early foundations',
+      summary: 'The earliest foundations of pregnancy are forming as implantation and placental development begin.',
+      tip: 'Consider arranging prenatal care and writing down questions you want to discuss with your care team.'
+    },
+    {
+      through: 8,
+      title: 'Core structures begin',
+      summary: 'The brain, spinal cord, facial features, and small limb buds are developing quickly during this stage.',
+      tip: 'Make space for rest, regular fluids, and foods you can tolerate. Ask your clinician about prenatal vitamins.'
+    },
+    {
+      through: 12,
+      title: 'Growing and moving',
+      summary: 'Major body structures are present and continue maturing, while small movements are beginning.',
+      tip: 'Keep prenatal appointments and share any symptoms or medication questions with your healthcare professional.'
+    },
+    {
+      through: 16,
+      title: 'Muscles and bones strengthen',
+      summary: 'The skeleton and muscles continue developing, and facial movements are becoming more coordinated.',
+      tip: 'Choose gentle activity that feels comfortable if your care professional has said it is appropriate for you.'
+    },
+    {
+      through: 20,
+      title: 'Senses develop',
+      summary: 'Hearing and other senses are developing, and movements may gradually become easier to notice.',
+      tip: 'Note new symptoms and movements so you can bring useful details to your prenatal visits.'
+    },
+    {
+      through: 24,
+      title: 'Responding to the world',
+      summary: 'The lungs continue developing and the baby may respond to sounds and changes in movement.',
+      tip: 'Support your energy with rest, balanced meals, and hydration according to your care plan.'
+    },
+    {
+      through: 28,
+      title: 'Brain and lungs mature',
+      summary: 'Brain development is active, the lungs are maturing, and the eyelids may begin opening.',
+      tip: 'Review upcoming appointments and ask your care team which changes should prompt a call.'
+    },
+    {
+      through: 32,
+      title: 'Steady growth',
+      summary: 'The baby is gaining body fat, practicing breathing movements, and continuing rapid brain development.',
+      tip: 'Use pillows or position changes for comfort and discuss sleep concerns with your care professional.'
+    },
+    {
+      through: 36,
+      title: 'Preparing for birth',
+      summary: 'Growth continues as the lungs and nervous system mature and the baby may settle into a birth position.',
+      tip: 'Consider reviewing your birth preferences, support contacts, and practical plans with your care team.'
+    },
+    {
+      through: 40,
+      title: 'Final weeks of growth',
+      summary: 'The organs continue their final maturation while the baby gains weight and prepares for birth.',
+      tip: 'Keep your care team’s contact details handy and follow their guidance about signs of labor or urgent concerns.'
+    }
+  ];
+
+  return stages.find((stage) => week <= stage.through) || stages[stages.length - 1];
 }
 
 function buildMonth(selectedMonth, stats, data) {
