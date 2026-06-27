@@ -683,7 +683,6 @@ function AuthGate({ onAuthenticated }) {
         <div className="auth-brand">
           <BloomLogo />
           <div>
-            <p className="eyebrow">Private access</p>
             <h1>BloomCycle</h1>
           </div>
         </div>
@@ -1687,10 +1686,6 @@ function SectionHeader({ title, subtitle }) {
 }
 
 function Icon({ name }) {
-  if (name === 'pregnant') {
-    return <span className="pregnant-woman-icon" role="img" aria-label="Pregnant woman">🤰</span>;
-  }
-
   const icons = {
     home: 'M4 11.5 12 5l8 6.5V20a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1v-8.5Z',
     calendar: 'M7 3v3M17 3v3M4 9h16M6 5h12a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z',
@@ -1714,6 +1709,7 @@ function Icon({ name }) {
     download: 'M12 4v11M8 11l4 4 4-4M5 20h14',
     chart: 'M5 20V10M12 20V4M19 20v-7M3 20h18',
     baby: 'M9 5a3 3 0 1 1 4.8 2.4A6.5 6.5 0 1 1 9 5ZM9 13h.01M15 13h.01M9.5 17c1.5 1 3.5 1 5 0',
+    pregnant: 'M12 5a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM10 7c-1.2 2.6-1.4 5.7-.5 8.5L8.5 22M13.5 7c2.8 1.5 4.5 4.2 4.5 7.3 0 2.6-1.7 4.7-4.5 4.7H10M13.5 7 13 22M9.5 11H14',
     plus: 'M12 5v14M5 12h14',
     minus: 'M5 12h14',
     close: 'm7 7 10 10M17 7 7 17'

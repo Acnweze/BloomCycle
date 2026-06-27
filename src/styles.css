@@ -1529,15 +1529,6 @@ textarea:focus {
   background: var(--plum);
 }
 
-.pregnant-woman-icon {
-  display: inline-grid;
-  width: 1.15rem;
-  height: 1.15rem;
-  place-items: center;
-  font-size: 1.05rem;
-  line-height: 1;
-}
-
 .private-mode .metric-card strong,
 .private-mode .history-list span,
 .private-mode .timeline-card,
