@@ -1433,11 +1433,6 @@ function AuthGate({ onAuthenticated }) {
           {mode === 'login' && <button type="button" onClick={() => changeMode('reset')}>Forgot password?</button>}
         </div>
 
-        <p className="auth-note">
-          {firebaseConfigured
-            ? 'Firebase manages account passwords and reset emails. Health logs remain local unless you enable Secure Cloud Sync.'
-            : 'Demo accounts and health logs stay in this browser only. Do not reuse a real password or enter sensitive real-world information in demo mode.'}
-        </p>
         <p className="auth-legal-copy">
           By continuing, you acknowledge the{' '}
           <button type="button" onClick={() => setLegalPage('terms')}>Terms of Use</button>
