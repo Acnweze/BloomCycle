@@ -79,3 +79,11 @@ This app is for tracking and educational purposes only. It should not replace me
 ## Documentation
 
 See [HOW_BLOOMCYCLE_WAS_BUILT.md](HOW_BLOOMCYCLE_WAS_BUILT.md) for the complete coding guide. A Microsoft Word version is also included.
+
+## Acknowledgements
+
+BloomCycle was designed and developed by **Agatha Nweze**.
+
+Throughout the development process, **ChatGPT (OpenAI)** provided guidance on software architecture, debugging, Firebase integration, deployment with Vercel, troubleshooting, and general development best practices. The application design, implementation, testing, and final technical decisions were completed by the project author.
+
+This project also reflects a personal learning journey in React, Firebase, GitHub, Vercel, and modern web application development.
