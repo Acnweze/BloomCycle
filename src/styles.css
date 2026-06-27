@@ -741,6 +741,50 @@ textarea:focus {
   padding: 1rem;
 }
 
+.calendar-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.calendar-toolbar h3 {
+  margin: 0;
+  color: var(--plum);
+  font-size: clamp(1.05rem, 3vw, 1.35rem);
+  text-align: center;
+}
+
+.month-nav-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 2.6rem;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  color: var(--grape);
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 0.82rem;
+  font-weight: 850;
+}
+
+.month-nav-button:first-child {
+  justify-self: start;
+}
+
+.month-nav-button:last-child {
+  justify-self: end;
+}
+
+.month-nav-button:hover,
+.month-nav-button:focus-visible {
+  border-color: var(--lilac);
+  background: rgba(217, 205, 249, 0.34);
+}
+
 .weekday-row,
 .calendar-grid {
   display: grid;
@@ -757,6 +801,7 @@ textarea:focus {
 }
 
 .day-cell {
+  position: relative;
   display: grid;
   min-height: 2.55rem;
   place-items: center;
@@ -791,6 +836,18 @@ textarea:focus {
   outline-offset: 2px;
 }
 
+.symptom-marker {
+  position: absolute;
+  right: 0.35rem;
+  bottom: 0.3rem;
+  width: 0.38rem;
+  height: 0.38rem;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  background: var(--rose);
+  box-shadow: 0 1px 3px rgba(50, 18, 63, 0.25);
+}
+
 .legend {
   display: flex;
   flex-wrap: wrap;
@@ -815,6 +872,7 @@ textarea:focus {
 .period-dot { background: var(--blush); }
 .fertile-dot { background: var(--lavender); }
 .ovulation-dot { background: var(--grape); }
+.symptom-dot { background: var(--rose); }
 .today-dot { background: var(--sage); }
 
 .chip-grid,
@@ -1444,6 +1502,22 @@ textarea:focus {
 
   .calendar-card {
     padding: 0.85rem;
+  }
+
+  .calendar-toolbar {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .calendar-toolbar h3 {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .month-nav-button {
+    grid-row: 2;
+    width: 100%;
+    padding-inline: 0.55rem;
+    font-size: 0.74rem;
   }
 
   .weekday-row,

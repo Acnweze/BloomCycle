@@ -832,12 +832,38 @@ function Dashboard({ data, stats, confidence, signature, updateProfile, recordPe
 }
 
 function CalendarPage({ stats, data, display }) {
-  const monthDays = buildMonth(stats, data.profile);
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const today = new Date();
+    return new Date(today.getFullYear(), today.getMonth(), 1);
+  });
+  const monthDays = useMemo(
+    () => buildMonth(selectedMonth, stats, data),
+    [selectedMonth, stats, data]
+  );
+  const monthLabel = new Intl.DateTimeFormat('en', {
+    month: 'long',
+    year: 'numeric'
+  }).format(selectedMonth);
+
+  const moveMonth = (offset) => {
+    setSelectedMonth((current) => new Date(current.getFullYear(), current.getMonth() + offset, 1));
+  };
 
   return (
     <section className="page">
-      <SectionHeader title={display('Calendar')} subtitle={display('Estimated cycle markers for this month')} />
+      <SectionHeader title={display('Calendar')} subtitle={display('Estimated cycle markers and logged symptoms')} />
       <div className="calendar-card">
+        <div className="calendar-toolbar">
+          <button type="button" className="month-nav-button" onClick={() => moveMonth(-1)}>
+            <span aria-hidden="true">&#8249;</span>
+            <span>Previous Month</span>
+          </button>
+          <h3 aria-live="polite">{monthLabel}</h3>
+          <button type="button" className="month-nav-button" onClick={() => moveMonth(1)}>
+            <span>Next Month</span>
+            <span aria-hidden="true">&#8250;</span>
+          </button>
+        </div>
         <div className="weekday-row">
           {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => (
             <span key={`${day}-${index}`}>{day}</span>
@@ -845,8 +871,14 @@ function CalendarPage({ stats, data, display }) {
         </div>
         <div className="calendar-grid">
           {monthDays.map((day) => (
-            <div key={day.key} className={`day-cell ${day.type}`}>
-              <span>{day.label}</span>
+            <div
+              key={day.key}
+              className={`day-cell ${day.type}`}
+              aria-label={day.ariaLabel}
+              title={day.symptoms?.join(', ')}
+            >
+              {day.date ? <time dateTime={day.date}>{day.label}</time> : <span>{day.label}</span>}
+              {day.hasSymptoms && <i className="symptom-marker" aria-hidden="true" />}
             </div>
           ))}
         </div>
@@ -855,6 +887,7 @@ function CalendarPage({ stats, data, display }) {
         <span><i className="period-dot" /> {display('Period')}</span>
         <span><i className="fertile-dot" /> {display('Fertile')}</span>
         <span><i className="ovulation-dot" /> {display('Ovulation')}</span>
+        <span><i className="symptom-dot" /> {display('Symptoms logged')}</span>
         <span><i className="today-dot" /> Today</span>
       </div>
     </section>
@@ -1505,22 +1538,33 @@ function Icon({ name }) {
   );
 }
 
-function buildMonth(stats, profile) {
+function buildMonth(selectedMonth, stats, data) {
   const today = stripTime(new Date());
+  const profile = data.profile;
   const lastPeriodStart = parseLocalDate(profile.lastPeriodStart);
   const cycleLength = Number(profile.cycleLength) || 28;
   const periodLength = Number(profile.periodLength) || 5;
-  const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-  const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+  const year = selectedMonth.getFullYear();
+  const month = selectedMonth.getMonth();
+  const startOfMonth = new Date(year, month, 1);
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
   const leading = startOfMonth.getDay();
   const cells = [];
+  const logs = [...(data.journal || []), ...(data.dailyLogs || []), data.todayLog]
+    .filter((log) => log?.date && log.symptoms?.length)
+    .reduce((byDate, log) => {
+      byDate.set(log.date, log.symptoms);
+      return byDate;
+    }, new Map());
 
   for (let i = 0; i < leading; i += 1) {
-    cells.push({ key: `blank-${i}`, label: '', type: 'blank' });
+    cells.push({ key: `blank-${year}-${month}-${i}`, label: '', type: 'blank' });
   }
 
   for (let day = 1; day <= daysInMonth; day += 1) {
-    const date = new Date(today.getFullYear(), today.getMonth(), day);
+    const date = new Date(year, month, day);
+    const dateKey = isoDate(date);
+    const daySymptoms = logs.get(dateKey) || [];
     let type = '';
     if (stats.ready && lastPeriodStart) {
       const elapsed = daysBetween(lastPeriodStart, date);
@@ -1533,10 +1577,27 @@ function buildMonth(stats, profile) {
 
       if (dayInCycle >= 1 && dayInCycle <= periodLength) type = 'period';
       if (date >= cycleFertileStart && date <= cycleFertileEnd) type = 'fertile';
-      if (isoDate(date) === isoDate(cycleOvulation)) type = 'ovulation';
+      if (dateKey === isoDate(cycleOvulation)) type = 'ovulation';
     }
-    if (isoDate(date) === isoDate(today)) type = `${type} today`.trim();
-    cells.push({ key: isoDate(date), label: day, type });
+    const isToday = dateKey === isoDate(today);
+    if (isToday) type = `${type} today`.trim();
+
+    const labels = [formatDate(date)];
+    if (type.includes('period')) labels.push('period');
+    if (type.includes('fertile')) labels.push('fertile window');
+    if (type.includes('ovulation')) labels.push('ovulation');
+    if (isToday) labels.push('today');
+    if (daySymptoms.length) labels.push(`symptoms logged: ${daySymptoms.join(', ')}`);
+
+    cells.push({
+      key: dateKey,
+      date: dateKey,
+      label: day,
+      type,
+      symptoms: daySymptoms,
+      hasSymptoms: daySymptoms.length > 0,
+      ariaLabel: labels.join(', ')
+    });
   }
 
   return cells;
