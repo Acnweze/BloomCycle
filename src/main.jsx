@@ -50,9 +50,7 @@ const defaultData = {
   journal: [],
   dailyLogs: [],
   pregnancy: {
-    inputMethod: 'lmp',
     lmp: '',
-    dueDate: '',
     weeklyNotes: []
   },
   settings: {
@@ -930,10 +928,6 @@ function PregnancyPage({ pregnancy, updatePregnancy, display }) {
     setWeeklyNote(matchingNote?.text || '');
   }, [noteWeek, pregnancy.weeklyNotes]);
 
-  const chooseInputMethod = (inputMethod) => {
-    updatePregnancy({ inputMethod });
-  };
-
   const saveWeeklyNote = () => {
     if (!pregnancyStats.ready) return;
     const text = weeklyNote.trim();
@@ -954,50 +948,19 @@ function PregnancyPage({ pregnancy, updatePregnancy, display }) {
     <section className="page pregnancy-page">
       <SectionHeader
         title={display('Pregnancy Tracker')}
-        subtitle={display('A private weekly view based on your LMP or estimated due date')}
+        subtitle={display('A private weekly view based on your last menstrual period')}
       />
 
       <div className="pregnancy-setup-panel">
-        <fieldset className="pregnancy-methods">
-          <legend>Calculate pregnancy from</legend>
-          <button
-            type="button"
-            className={pregnancy.inputMethod === 'lmp' ? 'active' : ''}
-            aria-pressed={pregnancy.inputMethod === 'lmp'}
-            onClick={() => chooseInputMethod('lmp')}
-          >
-            Last Menstrual Period (LMP)
-          </button>
-          <button
-            type="button"
-            className={pregnancy.inputMethod === 'dueDate' ? 'active' : ''}
-            aria-pressed={pregnancy.inputMethod === 'dueDate'}
-            onClick={() => chooseInputMethod('dueDate')}
-          >
-            Due Date
-          </button>
-        </fieldset>
-
-        {pregnancy.inputMethod === 'lmp' ? (
-          <label>
-            <span>First day of your last menstrual period</span>
-            <input
-              type="date"
-              max={isoDate(new Date())}
-              value={pregnancy.lmp}
-              onChange={(event) => updatePregnancy({ lmp: event.target.value })}
-            />
-          </label>
-        ) : (
-          <label>
-            <span>Estimated due date</span>
-            <input
-              type="date"
-              value={pregnancy.dueDate}
-              onChange={(event) => updatePregnancy({ dueDate: event.target.value })}
-            />
-          </label>
-        )}
+        <label>
+          <span>First day of your Last Menstrual Period (LMP)</span>
+          <input
+            type="date"
+            max={isoDate(new Date())}
+            value={pregnancy.lmp}
+            onChange={(event) => updatePregnancy({ lmp: event.target.value })}
+          />
+        </label>
         <small className="pregnancy-date-note">
           LMP dating estimates 40 weeks from the first day of the last period. A care professional may revise the date.
         </small>
@@ -1040,6 +1003,16 @@ function PregnancyPage({ pregnancy, updatePregnancy, display }) {
                 <span>{weeklyContent.summary}</span>
               </div>
             </article>
+            <article className="pregnancy-info-card fetus-size-card">
+              <span className="pregnancy-size-emoji" role="img" aria-label={weeklyContent.size}>
+                {weeklyContent.emoji}
+              </span>
+              <div>
+                <p>Week {pregnancyStats.developmentWeek} size</p>
+                <h2>About the size of {weeklyContent.size}</h2>
+                <span>A friendly visual comparison; individual growth varies.</span>
+              </div>
+            </article>
             <article className="pregnancy-info-card self-care">
               <Icon name="leaf" />
               <div>
@@ -1073,14 +1046,14 @@ function PregnancyPage({ pregnancy, updatePregnancy, display }) {
         <div className="pregnancy-empty-state">
           <Icon name="baby" />
           <h2>Add a date to begin</h2>
-          <p>Enter your LMP or due date to see an estimated week, trimester, progress, and weekly information.</p>
+          <p>Enter your LMP to see an estimated due date, week, trimester, progress, and weekly information.</p>
         </div>
       )}
 
       <div className="pregnancy-disclaimer">
         <Icon name="lock" />
         <p>
-          The Pregnancy Tracker is for educational purposes only and is not medical advice. Dates and development
+          This is for educational tracking only and not medical advice. Dates, size comparisons, and development
           summaries are estimates. Contact a qualified healthcare professional for prenatal care and personal guidance.
         </p>
       </div>
@@ -1750,7 +1723,7 @@ function Icon({ name }) {
 }
 
 function getPregnancyStats(pregnancy) {
-  const inputValue = pregnancy.inputMethod === 'dueDate' ? pregnancy.dueDate : pregnancy.lmp;
+  const inputValue = pregnancy.lmp;
   if (!inputValue) return { ready: false, error: '' };
 
   const enteredDate = parseLocalDate(inputValue);
@@ -1759,25 +1732,20 @@ function getPregnancyStats(pregnancy) {
   }
 
   const today = stripTime(new Date());
-  const lmp = pregnancy.inputMethod === 'dueDate' ? addDays(enteredDate, -280) : enteredDate;
-  const dueDate = pregnancy.inputMethod === 'dueDate' ? enteredDate : addDays(enteredDate, 280);
+  const lmp = enteredDate;
+  const dueDate = addDays(lmp, 280);
   const elapsedDays = pregnancyDaysBetween(lmp, today);
 
   if (elapsedDays < 0) {
-    return {
-      ready: false,
-      error: pregnancy.inputMethod === 'dueDate'
-        ? 'This due date is more than 40 weeks away. Check the date and try again.'
-        : 'The LMP date cannot be in the future.'
-    };
+    return { ready: false, error: 'The LMP date cannot be in the future.' };
   }
 
   const completedWeeks = Math.floor(elapsedDays / 7);
   const extraDays = elapsedDays % 7;
-  const developmentWeek = Math.min(40, Math.max(1, completedWeeks));
-  const trimester = completedWeeks < 13
+  const currentWeek = Math.min(40, Math.max(1, completedWeeks));
+  const trimester = currentWeek <= 13
     ? 'First trimester'
-    : completedWeeks < 28
+    : currentWeek <= 27
       ? 'Second trimester'
       : 'Third trimester';
 
@@ -1786,9 +1754,9 @@ function getPregnancyStats(pregnancy) {
     lmp,
     dueDate,
     completedWeeks,
-    developmentWeek,
+    developmentWeek: currentWeek,
     trimester,
-    weekLabel: `${completedWeeks} weeks, ${extraDays} ${extraDays === 1 ? 'day' : 'days'}`,
+    weekLabel: `Week ${currentWeek} · ${extraDays} ${extraDays === 1 ? 'day' : 'days'}`,
     daysRemaining: Math.max(0, pregnancyDaysBetween(today, dueDate)),
     progress: Math.min(100, Math.max(0, (elapsedDays / 280) * 100))
   };
@@ -1801,6 +1769,48 @@ function pregnancyDaysBetween(start, end) {
 }
 
 function getWeeklyPregnancyContent(week) {
+  const sizeComparisons = [
+    { size: 'a grain of sand', emoji: '✨' },
+    { size: 'a chia seed', emoji: '🌱' },
+    { size: 'a sesame seed', emoji: '🌱' },
+    { size: 'a poppy seed', emoji: '🌱' },
+    { size: 'an apple seed', emoji: '🍎' },
+    { size: 'a lentil', emoji: '🫘' },
+    { size: 'a blueberry', emoji: '🫐' },
+    { size: 'a raspberry', emoji: '🍓' },
+    { size: 'a cherry', emoji: '🍒' },
+    { size: 'a strawberry', emoji: '🍓' },
+    { size: 'a fig', emoji: '🫐' },
+    { size: 'a lime', emoji: '🍋' },
+    { size: 'a lemon', emoji: '🍋' },
+    { size: 'a peach', emoji: '🍑' },
+    { size: 'an apple', emoji: '🍎' },
+    { size: 'an avocado', emoji: '🥑' },
+    { size: 'a pear', emoji: '🍐' },
+    { size: 'a bell pepper', emoji: '🫑' },
+    { size: 'a mango', emoji: '🥭' },
+    { size: 'a banana', emoji: '🍌' },
+    { size: 'a carrot', emoji: '🥕' },
+    { size: 'a coconut', emoji: '🥥' },
+    { size: 'a grapefruit', emoji: '🍊' },
+    { size: 'an ear of corn', emoji: '🌽' },
+    { size: 'a rutabaga', emoji: '🥔' },
+    { size: 'a zucchini', emoji: '🥒' },
+    { size: 'a cauliflower', emoji: '🥦' },
+    { size: 'an eggplant', emoji: '🍆' },
+    { size: 'an acorn squash', emoji: '🎃' },
+    { size: 'a cabbage', emoji: '🥬' },
+    { size: 'a coconut', emoji: '🥥' },
+    { size: 'a squash', emoji: '🎃' },
+    { size: 'a pineapple', emoji: '🍍' },
+    { size: 'a cantaloupe', emoji: '🍈' },
+    { size: 'a honeydew melon', emoji: '🍈' },
+    { size: 'a papaya', emoji: '🥭' },
+    { size: 'a bunch of Swiss chard', emoji: '🥬' },
+    { size: 'a leek', emoji: '🥬' },
+    { size: 'a small pumpkin', emoji: '🎃' },
+    { size: 'a watermelon', emoji: '🍉' }
+  ];
   const stages = [
     {
       through: 4,
@@ -1864,7 +1874,9 @@ function getWeeklyPregnancyContent(week) {
     }
   ];
 
-  return stages.find((stage) => week <= stage.through) || stages[stages.length - 1];
+  const safeWeek = Math.min(40, Math.max(1, week));
+  const stage = stages.find((item) => safeWeek <= item.through) || stages[stages.length - 1];
+  return { ...stage, ...sizeComparisons[safeWeek - 1] };
 }
 
 function buildMonth(selectedMonth, stats, data) {

@@ -407,40 +407,6 @@ h2 {
   padding: 1rem;
 }
 
-.pregnancy-methods {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.55rem;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.pregnancy-methods legend {
-  grid-column: 1 / -1;
-  margin-bottom: 0.1rem;
-  color: var(--grape);
-  font-size: 0.82rem;
-  font-weight: 800;
-}
-
-.pregnancy-methods button {
-  min-height: 3rem;
-  padding: 0.65rem;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  color: var(--grape);
-  background: rgba(255, 255, 255, 0.68);
-  font-size: 0.8rem;
-  font-weight: 850;
-}
-
-.pregnancy-methods button.active {
-  border-color: var(--lilac);
-  color: white;
-  background: var(--grape);
-}
-
 .pregnancy-date-note {
   color: var(--muted);
   line-height: 1.45;
@@ -509,6 +475,17 @@ h2 {
 .pregnancy-info-card.self-care > svg {
   color: #31513b;
   background: rgba(124, 154, 130, 0.22);
+}
+
+.pregnancy-size-emoji {
+  display: grid;
+  width: 2.8rem;
+  height: 2.8rem;
+  place-items: center;
+  border-radius: 16px;
+  background: rgba(217, 205, 249, 0.42);
+  font-size: 1.55rem;
+  line-height: 1;
 }
 
 .pregnancy-info-card p {
@@ -1562,6 +1539,10 @@ textarea:focus {
 
   .analytics-metrics {
     grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .pregnancy-weekly-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .hero-panel {
